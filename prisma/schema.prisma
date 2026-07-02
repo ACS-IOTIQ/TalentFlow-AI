@@ -433,6 +433,8 @@ model Interview {
   durationMinutes   Int             @default(60) @map("duration_minutes")
   location          String?
   videoLink         String?         @map("video_link")
+  interviewerName   String?         @map("interviewer_name")
+  interviewerEmail  String?         @map("interviewer_email")
   status            InterviewStatus @default(SCHEDULED)
   scheduledById     String?         @map("scheduled_by_id")
   createdAt         DateTime        @default(now()) @map("created_at")

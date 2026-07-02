@@ -165,6 +165,10 @@ function parseJsonObject(text: string): Record<string, unknown> {
   throw new Error('AI resume extraction returned invalid JSON')
 }
 
+function resumeJsonSchema() {
+  return '{"standardFields":{"fullName":null,"email":null,"phone":null,"location":null,"currentTitle":null,"currentCompany":null,"totalExperienceYears":null,"noticePeriodDays":null,"expectedSalary":null,"linkedinUrl":null},"skills":[{"name":"","category":null,"proficiency":null,"yearsUsed":null}],"dynamicDetails":{"summary":null,"experience":[{"title":"","company":"","from":null,"to":null,"location":null,"highlights":[]}],"education":[{"degree":null,"institution":null,"year":null,"details":null}],"certifications":[{"name":"","issuer":null,"year":null}],"projects":[{"name":"","role":null,"description":null,"technologies":[]}],"languages":[{"name":"","proficiency":null}],"achievements":[],"links":[{"label":"","url":""}],"workAuthorization":null,"visaStatus":null,"salaryNotes":null,"availabilityNotes":null,"gaps":[{"period":"","description":""}],"concerns":[{"type":"employment_gap|vague_education|job_hopping|missing_contact|other","severity":"INFO|WARNING|CRITICAL","description":"","excerpt":null}],"rawInferredFields":{}},"extractionMeta":{"confidence":0,"missingFields":[]}}'
+}
+
 async function repairResumeExtractionJson(
   invalidResponse: string,
   resumeText: string,
@@ -172,10 +176,10 @@ async function repairResumeExtractionJson(
   sourceFileName: string | undefined,
 ) {
   const result = await generateAIText({
-    maxTokens: 2500,
+    maxTokens: 6000,
     json: true,
-    system: 'Convert resume extraction output into valid JSON only. Never include markdown or commentary.',
-    prompt: `Return one valid JSON object matching this schema. Use the resume text when available to fill missing values, and use null/empty arrays when unknown. Infer currentTitle/currentCompany from the most recent role. Compute totalExperienceYears from dated work history when explicit total experience is missing.
+    system: 'Convert resume extraction output into valid JSON only. Never include markdown, comments, trailing commas, or commentary.',
+    prompt: `Return one valid JSON object matching this schema. Use short values and arrays. Use the resume text when available to fill missing values, and use null/empty arrays when unknown. Infer currentTitle/currentCompany from the most recent role. Compute totalExperienceYears from dated work history when explicit total experience is missing.
 ${jdBlock}
 File: ${sourceFileName || 'unknown'}
 Invalid previous output:
@@ -183,10 +187,38 @@ ${compactText(invalidResponse, 5000)}
 Resume text:
 ${compactText(resumeText, 10000) || 'Not available; use only facts present in the previous output.'}
 JSON schema:
-{"standardFields":{"fullName":null,"email":null,"phone":null,"location":null,"currentTitle":null,"currentCompany":null,"totalExperienceYears":null,"noticePeriodDays":null,"expectedSalary":null,"linkedinUrl":null},"skills":[{"name":"","category":null,"proficiency":null,"yearsUsed":null}],"dynamicDetails":{"summary":null,"experience":[{"title":"","company":"","from":null,"to":null,"location":null,"highlights":[]}],"education":[{"degree":null,"institution":null,"year":null,"details":null}],"certifications":[{"name":"","issuer":null,"year":null}],"projects":[{"name":"","role":null,"description":null,"technologies":[]}],"languages":[{"name":"","proficiency":null}],"achievements":[],"links":[{"label":"","url":""}],"workAuthorization":null,"visaStatus":null,"salaryNotes":null,"availabilityNotes":null,"gaps":[{"period":"","description":""}],"concerns":[{"type":"employment_gap|vague_education|job_hopping|missing_contact|other","severity":"INFO|WARNING|CRITICAL","description":"","excerpt":null}],"rawInferredFields":{}},"extractionMeta":{"confidence":0,"missingFields":[]}}`,
+${resumeJsonSchema()}`,
   })
 
   return result
+}
+
+async function minimalResumeExtractionJson(
+  invalidResponse: string,
+  resumeText: string,
+  jdBlock: string,
+  sourceFileName: string | undefined,
+) {
+  return generateAIText({
+    maxTokens: 3500,
+    json: true,
+    system: 'Extract a compact resume profile as valid JSON only. No markdown. No long paragraphs. No trailing commas.',
+    prompt: `The previous resume extraction JSON was invalid. Create a smaller valid JSON object now.
+Rules:
+- Keep experience to the latest 5 roles.
+- Keep highlights to max 2 short strings per role.
+- Keep skills to max 25 items.
+- Use null/empty arrays when unknown.
+- Output only JSON matching this schema:
+${resumeJsonSchema()}
+
+${jdBlock}
+File: ${sourceFileName || 'unknown'}
+Invalid previous output:
+${compactText(invalidResponse, 3500)}
+Resume text:
+${compactText(resumeText, 9000) || 'Not available; use only facts present in the previous output.'}`,
+  })
 }
 
 function normalizeSkills(value: unknown): ResumeExtractionSkill[] {
@@ -224,6 +256,105 @@ function normalizeConcerns(value: unknown): ResumeExtractionConcern[] {
       excerpt: normalizeText(item.excerpt),
     }]
   })
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map(value => value.trim()).filter(Boolean)))
+}
+
+function extractFirstMatch(text: string, pattern: RegExp) {
+  const match = text.match(pattern)
+  return (match?.[1] || match?.[0])?.trim() || null
+}
+
+function inferSkillNames(text: string) {
+  const skillDictionary = [
+    'AWS', 'Azure', 'GCP', 'Docker', 'Kubernetes', 'Jenkins', 'Terraform', 'Ansible', 'Linux', 'Git',
+    'GitHub', 'GitLab', 'CI/CD', 'DevOps', 'Python', 'Shell Scripting', 'Bash', 'PowerShell', 'Java',
+    'JavaScript', 'TypeScript', 'React', 'Node.js', 'SQL', 'PostgreSQL', 'MySQL', 'MongoDB', 'Redis',
+    'Prometheus', 'Grafana', 'ELK', 'Nginx', 'Apache', 'SonarQube', 'Maven', 'Gradle', 'Jira',
+    'ServiceNow', 'Agile', 'Scrum',
+  ]
+  const normalized = text.toLowerCase()
+  return skillDictionary.filter(skill => normalized.includes(skill.toLowerCase()))
+}
+
+function inferLocation(text: string) {
+  const cities = [
+    'Hyderabad', 'Bengaluru', 'Bangalore', 'Chennai', 'Mumbai', 'Pune', 'Delhi', 'Noida', 'Gurugram',
+    'Gurgaon', 'Kolkata', 'Dubai', 'Abu Dhabi', 'Sharjah', 'Riyadh', 'Doha',
+  ]
+  const found = cities.find(city => new RegExp(`\\b${city}\\b`, 'i').test(text))
+  return found || null
+}
+
+function inferTitle(text: string) {
+  const titles = [
+    'DevOps Engineer', 'Senior DevOps Engineer', 'Cloud Engineer', 'Site Reliability Engineer',
+    'SRE', 'System Administrator', 'Linux Administrator', 'Build and Release Engineer',
+    'Software Engineer', 'Senior Software Engineer', 'Data Engineer', 'Project Manager',
+  ]
+  return titles.find(title => new RegExp(`\\b${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)) || null
+}
+
+function partialExtractionFromText(
+  resumeText: string,
+  sourceFileName: string | undefined,
+  model: string,
+  provider: string,
+): ResumeProfileExtraction {
+  const text = resumeText.replace(/\s+/g, ' ').trim()
+  const email = extractFirstMatch(text, /\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b/i)
+  const phone = extractFirstMatch(text, /(?:\+?\d[\d\s().-]{7,}\d)/)
+  const linkedinUrl = text.match(/https?:\/\/(?:www\.)?linkedin\.com\/[^\s,;)]*/i)?.[0] || null
+  const totalExperienceYears = normalizeNumber(extractFirstMatch(text, /\b(\d+(?:\.\d+)?)\+?\s*(?:years|yrs)\b/i))
+  const skillNames = inferSkillNames(text)
+  const firstMeaningfulLine = resumeText
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => line.length > 2 && !/@/.test(line) && !/\d{7,}/.test(line))
+
+  const standardFields = {
+    fullName: firstMeaningfulLine || null,
+    email,
+    phone,
+    location: inferLocation(text),
+    currentTitle: inferTitle(text),
+    currentCompany: null,
+    totalExperienceYears,
+    noticePeriodDays: normalizeNumber(extractFirstMatch(text, /\bnotice\s*period[:\s-]*(\d+)\s*(?:days?)?/i)),
+    expectedSalary: null,
+    linkedinUrl,
+  }
+  const missingFields = Object.entries(standardFields)
+    .filter(([, value]) => !value)
+    .map(([key]) => key)
+
+  return normalizeExtraction({
+    standardFields,
+    skills: uniqueStrings(skillNames).map(name => ({ name })),
+    dynamicDetails: {
+      summary: text ? compactText(text, 500) : null,
+      experience: [],
+      education: [],
+      certifications: [],
+      projects: [],
+      languages: [],
+      achievements: [],
+      links: linkedinUrl ? [{ label: 'LinkedIn', url: linkedinUrl }] : [],
+      concerns: [{
+        type: 'partial_ai_parse',
+        severity: 'WARNING',
+        description: 'AI returned invalid JSON twice; TalentFlow AI recovered key fields from resume text.',
+        excerpt: null,
+      }],
+      rawInferredFields: {},
+    },
+    extractionMeta: {
+      confidence: text ? 0.45 : 0.2,
+      missingFields,
+    },
+  }, sourceFileName, model, provider)
 }
 
 function hasNormalizedText(value: unknown) {
@@ -352,16 +483,16 @@ export async function extractResumeProfile(
     : 'JD: none'
 
   const result = await generateAIText({
-    maxTokens: 2500,
+    maxTokens: 6000,
     json: true,
-    system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts.',
+    system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts. Keep arrays concise.',
     prompt: `Task: extract a complete hiring profile from the resume.
 Rules: dates YYYY-MM when possible; order experience newest first; infer currentTitle/currentCompany from the newest role; compute totalExperienceYears from dated work history if explicit total experience is absent; expectedSalary numeric only if explicit; noticePeriodDays numeric days; confidence 0..1; put unusual useful fields in rawInferredFields; list uncertain absent standard fields in missingFields.
 ${jdBlock}
 File: ${sourceFileName || 'unknown'}
 Resume: ${compactText(resumeText, 12000)}
 JSON schema:
-{"standardFields":{"fullName":null,"email":null,"phone":null,"location":null,"currentTitle":null,"currentCompany":null,"totalExperienceYears":null,"noticePeriodDays":null,"expectedSalary":null,"linkedinUrl":null},"skills":[{"name":"","category":null,"proficiency":null,"yearsUsed":null}],"dynamicDetails":{"summary":null,"experience":[{"title":"","company":"","from":null,"to":null,"location":null,"highlights":[]}],"education":[{"degree":null,"institution":null,"year":null,"details":null}],"certifications":[{"name":"","issuer":null,"year":null}],"projects":[{"name":"","role":null,"description":null,"technologies":[]}],"languages":[{"name":"","proficiency":null}],"achievements":[],"links":[{"label":"","url":""}],"workAuthorization":null,"visaStatus":null,"salaryNotes":null,"availabilityNotes":null,"gaps":[{"period":"","description":""}],"concerns":[{"type":"employment_gap|vague_education|job_hopping|missing_contact|other","severity":"INFO|WARNING|CRITICAL","description":"","excerpt":null}],"rawInferredFields":{}},"extractionMeta":{"confidence":0,"missingFields":[]}}`,
+${resumeJsonSchema()}`,
   })
 
   try {
@@ -369,8 +500,19 @@ JSON schema:
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('invalid JSON')) throw error
 
-    const repaired = await repairResumeExtractionJson(result.text, resumeText, jdBlock, sourceFileName)
-    return normalizeExtraction(parseJsonObject(repaired.text), sourceFileName, repaired.model, repaired.provider)
+    try {
+      const repaired = await repairResumeExtractionJson(result.text, resumeText, jdBlock, sourceFileName)
+      return normalizeExtraction(parseJsonObject(repaired.text), sourceFileName, repaired.model, repaired.provider)
+    } catch (repairError) {
+      if (!(repairError instanceof Error) || !repairError.message.includes('invalid JSON')) throw repairError
+      try {
+        const minimal = await minimalResumeExtractionJson(result.text, resumeText, jdBlock, sourceFileName)
+        return normalizeExtraction(parseJsonObject(minimal.text), sourceFileName, minimal.model, minimal.provider)
+      } catch (minimalError) {
+        if (!(minimalError instanceof Error) || !minimalError.message.includes('invalid JSON')) throw minimalError
+        return partialExtractionFromText(resumeText, sourceFileName, result.model, result.provider)
+      }
+    }
   }
 }
 
@@ -387,15 +529,15 @@ export async function extractResumeProfileFromDocument(
     : 'JD: none'
 
   const result = await generateAIText({
-    maxTokens: 2500,
+    maxTokens: 6000,
     json: true,
-    system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts.',
+    system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts. Keep arrays concise.',
     prompt: `Task: extract a complete hiring profile from the attached resume document.
 Rules: dates YYYY-MM when possible; order experience newest first; infer currentTitle/currentCompany from the newest role; compute totalExperienceYears from dated work history if explicit total experience is absent; expectedSalary numeric only if explicit; noticePeriodDays numeric days; confidence 0..1; put unusual useful fields in rawInferredFields; list uncertain absent standard fields in missingFields.
 ${jdBlock}
 File: ${sourceFileName || 'unknown'}
 JSON schema:
-{"standardFields":{"fullName":null,"email":null,"phone":null,"location":null,"currentTitle":null,"currentCompany":null,"totalExperienceYears":null,"noticePeriodDays":null,"expectedSalary":null,"linkedinUrl":null},"skills":[{"name":"","category":null,"proficiency":null,"yearsUsed":null}],"dynamicDetails":{"summary":null,"experience":[{"title":"","company":"","from":null,"to":null,"location":null,"highlights":[]}],"education":[{"degree":null,"institution":null,"year":null,"details":null}],"certifications":[{"name":"","issuer":null,"year":null}],"projects":[{"name":"","role":null,"description":null,"technologies":[]}],"languages":[{"name":"","proficiency":null}],"achievements":[],"links":[{"label":"","url":""}],"workAuthorization":null,"visaStatus":null,"salaryNotes":null,"availabilityNotes":null,"gaps":[{"period":"","description":""}],"concerns":[{"type":"employment_gap|vague_education|job_hopping|missing_contact|other","severity":"INFO|WARNING|CRITICAL","description":"","excerpt":null}],"rawInferredFields":{}},"extractionMeta":{"confidence":0,"missingFields":[]}}`,
+${resumeJsonSchema()}`,
     inlineData: {
       mimeType,
       data: fileBuffer.toString('base64'),
@@ -407,7 +549,13 @@ JSON schema:
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('invalid JSON')) throw error
 
-    const repaired = await repairResumeExtractionJson(result.text, '', jdBlock, sourceFileName)
-    return normalizeExtraction(parseJsonObject(repaired.text), sourceFileName, repaired.model, repaired.provider)
+    try {
+      const repaired = await repairResumeExtractionJson(result.text, '', jdBlock, sourceFileName)
+      return normalizeExtraction(parseJsonObject(repaired.text), sourceFileName, repaired.model, repaired.provider)
+    } catch (repairError) {
+      if (!(repairError instanceof Error) || !repairError.message.includes('invalid JSON')) throw repairError
+      const minimal = await minimalResumeExtractionJson(result.text, '', jdBlock, sourceFileName)
+      return normalizeExtraction(parseJsonObject(minimal.text), sourceFileName, minimal.model, minimal.provider)
+    }
   }
 }
