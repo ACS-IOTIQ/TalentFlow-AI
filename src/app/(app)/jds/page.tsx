@@ -5,7 +5,8 @@ import { useSession } from 'next-auth/react'
 import { toast } from 'sonner'
 import {
   Plus, Wand2, FileText, Search, X, Loader2, ExternalLink,
-  Pencil, Trash2, AlertTriangle, CheckCircle2, ChevronDown,
+  Pencil, Trash2, AlertTriangle, CheckCircle2,
+  Upload, Download,
 } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
@@ -26,6 +27,8 @@ interface JD {
   salaryMax?: number
   requiredSkills: string[]
   rawContent?: string
+  polishedContent?: string
+  finalContent?: string
   createdAt: string
   _count?: { pipelineEntries: number }
 }
@@ -139,41 +142,109 @@ function SkillsInput({ skills, onChange }: { skills: string[]; onChange: (s: str
 
 function NewJDModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient()
+  const [mode, setMode] = useState<'manual' | 'upload'>('manual')
   const [form, setForm] = useState({
     title: '', client: 'Tahaluf', location: '', openings: 1,
     employmentType: '', experienceMin: '', experienceMax: '',
     salaryMin: '', salaryMax: '', requiredSkills: [] as string[], rawContent: '',
   })
+  const [rawFileName, setRawFileName] = useState('')
+  const [polishedContent, setPolishedContent] = useState('')
+  const [extracting, setExtracting] = useState(false)
+  const [polishing, setPolishing] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }))
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const buildPayload = (options?: { polished?: string; savePolished?: boolean }) => {
+    const body: any = {
+      title: form.title,
+      client: form.client,
+      location: form.location || undefined,
+      openings: Number(form.openings),
+      requiredSkills: form.requiredSkills,
+      rawContent: form.rawContent || undefined,
+      rawFileName: rawFileName || undefined,
+      employmentType: form.employmentType || undefined,
+    }
+    if (form.experienceMin) body.experienceMin = Number(form.experienceMin)
+    if (form.experienceMax) body.experienceMax = Number(form.experienceMax)
+    if (form.salaryMin) body.salaryMin = Number(form.salaryMin)
+    if (form.salaryMax) body.salaryMax = Number(form.salaryMax)
+    if (options?.savePolished && options.polished) {
+      body.polishedContent = options.polished
+      body.finalContent = options.polished
+      body.status = 'POLISHED'
+    }
+    return body
+  }
+
+  const handleExtract = async (file?: File) => {
+    if (!file) return
+    setExtracting(true)
+    setPolishedContent('')
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      const r = await fetch('/api/jds/extract', { method: 'POST', body })
+      const data = await r.json()
+      if (!data.success) {
+        toast.error(data.error || 'Failed to extract JD')
+        return
+      }
+      const extracted = data.data
+      setForm({
+        title: extracted.title || '',
+        client: extracted.client || 'Tahaluf',
+        location: extracted.location || '',
+        openings: extracted.openings || 1,
+        employmentType: extracted.employmentType || '',
+        experienceMin: extracted.experienceMin?.toString() || '',
+        experienceMax: extracted.experienceMax?.toString() || '',
+        salaryMin: extracted.salaryMin?.toString() || '',
+        salaryMax: extracted.salaryMax?.toString() || '',
+        requiredSkills: extracted.requiredSkills || [],
+        rawContent: extracted.rawContent || '',
+      })
+      setRawFileName(extracted.rawFileName || file.name)
+      toast.success('JD extracted. Review and edit the fields.')
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  const polishDraft = async () => {
+    setPolishing(true)
+    try {
+      const r = await fetch('/api/jds/polish-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildPayload()),
+      })
+      const data = await r.json()
+      if (!data.success) {
+        toast.error(data.error || 'Failed to polish JD')
+        return ''
+      }
+      const polished = data.data.polishedContent || ''
+      setPolishedContent(polished)
+      return polished
+    } finally {
+      setPolishing(false)
+    }
+  }
+
+  const saveJD = async (options?: { polished?: string; savePolished?: boolean }) => {
     setSaving(true)
     try {
-      const body: any = {
-        title: form.title,
-        client: form.client,
-        location: form.location || undefined,
-        openings: Number(form.openings),
-        requiredSkills: form.requiredSkills,
-        rawContent: form.rawContent || undefined,
-        employmentType: form.employmentType || undefined,
-      }
-      if (form.experienceMin) body.experienceMin = Number(form.experienceMin)
-      if (form.experienceMax) body.experienceMax = Number(form.experienceMax)
-      if (form.salaryMin) body.salaryMin = Number(form.salaryMin)
-      if (form.salaryMax) body.salaryMax = Number(form.salaryMax)
-
       const r = await fetch('/api/jds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildPayload(options)),
       })
       const data = await r.json()
       if (data.success) {
-        toast.success('Job description created successfully')
+        toast.success(options?.savePolished ? 'Polished JD saved successfully' : 'Job description saved')
         qc.invalidateQueries({ queryKey: ['jds'] })
         onClose()
       } else {
@@ -184,18 +255,68 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const handleSaveDraft = async (e: React.FormEvent) => {
+    e.preventDefault()
+    await saveJD()
+  }
+
+  const handlePolishAndSave = async () => {
+    if (!form.title.trim()) {
+      toast.error('Role title is required')
+      return
+    }
+    const polished = polishedContent || await polishDraft()
+    if (polished) await saveJD({ polished, savePolished: true })
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-card border border-border rounded-xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
+      <div className="bg-card border border-border rounded-xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
           <div>
             <h2 className="font-semibold">New job description</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Fill in the details below to create a new JD</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Create manually or upload an existing JD for AI extraction</p>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-accent rounded-lg"><X size={16} /></button>
         </div>
 
-        <form onSubmit={handleSubmit} className="overflow-y-auto flex-1 p-6 space-y-4">
+        <div className="px-6 pt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode('manual')}
+            className={cn('flex items-center gap-2 px-3 py-2 text-sm border rounded-lg',
+              mode === 'manual' ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-border hover:bg-accent')}
+          >
+            <Pencil size={14} /> Manual creation
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('upload')}
+            className={cn('flex items-center gap-2 px-3 py-2 text-sm border rounded-lg',
+              mode === 'upload' ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-border hover:bg-accent')}
+          >
+            <Upload size={14} /> Upload existing JD
+          </button>
+        </div>
+
+        <form id="new-jd-form" onSubmit={handleSaveDraft} className="overflow-y-auto flex-1 p-6 space-y-4">
+          {mode === 'upload' && (
+            <div className="border border-dashed border-border rounded-xl p-5 bg-muted/30">
+              <label className="flex flex-col items-center justify-center gap-2 cursor-pointer text-center">
+                {extracting ? <Loader2 size={24} className="animate-spin text-brand-600" /> : <Upload size={24} className="text-brand-600" />}
+                <span className="text-sm font-medium">{rawFileName || 'Upload PDF, DOC, or DOCX'}</span>
+                <span className="text-xs text-muted-foreground">AI extracts the JD into editable fields before polishing</span>
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  disabled={extracting}
+                  onChange={e => handleExtract(e.target.files?.[0])}
+                />
+              </label>
+            </div>
+          )}
+
           {/* Row 1: Title + Client */}
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -275,8 +396,21 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
             <textarea value={form.rawContent} onChange={e => set('rawContent', e.target.value)}
               rows={5}
               className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-background resize-none"
-              placeholder="Paste the raw JD here. AI will polish it afterwards." />
+              placeholder="Paste the rough JD here, or upload a document to extract it." />
           </div>
+
+          {polishedContent && (
+            <div>
+              <label className="block text-sm font-medium mb-1.5">AI polished preview</label>
+              <textarea
+                value={polishedContent}
+                onChange={e => setPolishedContent(e.target.value)}
+                rows={8}
+                className="w-full px-3 py-2 border border-input rounded-lg text-sm bg-background resize-none"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Review or edit the polished JD before saving.</p>
+            </div>
+          )}
         </form>
 
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-border flex-shrink-0">
@@ -285,11 +419,20 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            onClick={(e) => { const form = document.querySelector('form'); form?.requestSubmit() }}
-            disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-60">
+            type="submit"
+            form="new-jd-form"
+            disabled={saving || polishing || extracting}
+            className="flex items-center gap-2 px-4 py-2 text-sm border border-border rounded-lg hover:bg-accent disabled:opacity-60">
             {saving && <Loader2 size={14} className="animate-spin" />}
-            Create JD
+            Save draft
+          </button>
+          <button
+            type="button"
+            onClick={handlePolishAndSave}
+            disabled={saving || polishing || extracting}
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-60">
+            {polishing || saving ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+            Polish with AI & save
           </button>
         </div>
       </div>
@@ -590,9 +733,9 @@ export default function JDsPage() {
   }[confirm.type] : null
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto max-w-[1600px] space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Job descriptions</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{jds.length} total</p>
@@ -608,8 +751,8 @@ export default function JDsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3">
-        <div className="flex items-center gap-2 flex-1 max-w-sm px-3 py-2 border border-border rounded-lg bg-background">
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="flex min-h-10 items-center gap-2 flex-1 max-w-xl px-3 py-2 border border-border rounded-lg bg-background">
           <Search size={15} className="text-muted-foreground" />
           <input
             value={search}
@@ -626,7 +769,7 @@ export default function JDsPage() {
         <select
           value={statusFilter}
           onChange={e => setStatusFilter(e.target.value)}
-          className="px-3 py-2 border border-border rounded-lg text-sm bg-background"
+          className="min-h-10 px-3 py-2 border border-border rounded-lg text-sm bg-background sm:w-36"
         >
           <option value="">All statuses</option>
           <option value="RAW">Raw</option>
@@ -644,7 +787,7 @@ export default function JDsPage() {
         ))}
 
         {jds.map((jd) => (
-          <div key={jd.id} className="bg-card border border-border rounded-xl p-5 flex items-start justify-between gap-4 hover:border-brand-300 transition-colors">
+          <div key={jd.id} className="bg-card border border-border rounded-xl p-5 flex flex-col gap-4 hover:border-brand-300 transition-colors xl:flex-row xl:items-start xl:justify-between">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', STATUS_COLORS[jd.status] || STATUS_COLORS.RAW)}>
@@ -683,7 +826,7 @@ export default function JDsPage() {
             </div>
 
             {/* Action buttons */}
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex flex-wrap items-center gap-2 xl:flex-shrink-0 xl:justify-end">
               {jd.status === 'RAW' && canEdit && (
                 <button
                   onClick={() => setConfirm({ type: 'polish', jd })}
@@ -699,6 +842,15 @@ export default function JDsPage() {
               >
                 <ExternalLink size={13} /> View
               </Link>
+
+              {(jd.finalContent || jd.polishedContent || jd.rawContent) && (
+                <a
+                  href={`/api/jds/${jd.id}/download`}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-accent"
+                >
+                  <Download size={13} /> PDF
+                </a>
+              )}
 
               {canEdit && (
                 <button

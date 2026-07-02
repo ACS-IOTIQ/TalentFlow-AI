@@ -24,7 +24,12 @@ export async function extractTextFromDOCX(buffer: Buffer): Promise<string> {
 export async function extractTextFromFile(buffer: Buffer, filename: string): Promise<string> {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.pdf')) return extractTextFromPDF(buffer)
-  if (lower.endsWith('.docx') || lower.endsWith('.doc')) return extractTextFromDOCX(buffer)
+  if (lower.endsWith('.docx')) return extractTextFromDOCX(buffer)
+  if (lower.endsWith('.doc')) {
+    const docxText = await extractTextFromDOCX(buffer)
+    if (docxText) return docxText
+    return buffer.toString('utf-8').replace(/[^\x09\x0A\x0D\x20-\x7E]+/g, ' ').replace(/\s+/g, ' ').trim()
+  }
   return buffer.toString('utf-8')
 }
 

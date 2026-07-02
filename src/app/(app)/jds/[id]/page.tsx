@@ -4,7 +4,7 @@ import { useSession } from 'next-auth/react'
 import { toast } from 'sonner'
 import {
   ArrowLeft, Wand2, Globe, Loader2, Pencil, Trash2, X,
-  AlertTriangle, CheckCircle2, Save,
+  AlertTriangle, CheckCircle2, Save, Download,
 } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
@@ -425,9 +425,9 @@ export default function JDDetailPage({ params }: { params: { id: string } }) {
   const displayContent = editingContent || jd.finalContent || jd.polishedContent || jd.rawContent || ''
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto max-w-[1600px] space-y-5">
       {/* Header */}
-      <div className="flex items-start gap-3">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
         <Link href="/jds" className="p-1.5 hover:bg-accent rounded-lg mt-0.5">
           <ArrowLeft size={16} />
         </Link>
@@ -444,7 +444,7 @@ export default function JDDetailPage({ params }: { params: { id: string } }) {
         </div>
 
         {/* Header action buttons */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex flex-wrap items-center gap-2 xl:flex-shrink-0 xl:justify-end">
           {jd.status === 'RAW' && canEdit && (
             <button
               onClick={() => setConfirm('polish')}
@@ -461,6 +461,15 @@ export default function JDDetailPage({ params }: { params: { id: string } }) {
             >
               <Pencil size={14} /> Edit
             </button>
+          )}
+
+          {displayContent && (
+            <a
+              href={`/api/jds/${jd.id}/download`}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-border rounded-lg hover:bg-accent"
+            >
+              <Download size={14} /> PDF
+            </a>
           )}
 
           {canClose && jd.status !== 'CLOSED' && (
