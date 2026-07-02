@@ -2,7 +2,12 @@ import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, auditLog, handleError } from '@/lib/api-utils'
 import { assessInternalResource } from '@/lib/ai/internal-resource'
+import { deleteCandidatesCascade } from '@/lib/candidate-cascade'
 import { z } from 'zod'
+
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.string()).min(1),
+})
 
 const resourceSchema = z.object({
   employeeIdRef: z.string().min(2),
@@ -23,6 +28,10 @@ const resourceSchema = z.object({
 })
 
 const assessSchema = resourceSchema.partial().extend({
+  jdId: z.string().min(1),
+})
+
+const analyzeSchema = z.object({
   jdId: z.string().min(1),
 })
 
@@ -93,6 +102,71 @@ export async function POST(req: NextRequest) {
         jdSkills: jd.requiredSkills,
       })
       return ok(assessment)
+    }
+
+    if (action === 'analyze') {
+      const { jdId } = analyzeSchema.parse(await req.json())
+      const jd = await prisma.jobDescription.findUnique({
+        where: { id: jdId },
+        select: { id: true, title: true, client: true, rawContent: true, polishedContent: true, finalContent: true, requiredSkills: true },
+      })
+      if (!jd) return err('JD not found', 404)
+
+      const candidates = await prisma.candidate.findMany({
+        where: { isInternal: true },
+        include: { skills: true },
+        orderBy: { fullName: 'asc' },
+      })
+
+      const jdMeta = { id: jd.id, title: jd.title, client: jd.client }
+      if (!candidates.length) {
+        return ok({ jd: jdMeta, results: [], analyzed: 0, errors: 0 })
+      }
+
+      const jdContent = jd.finalContent || jd.polishedContent || jd.rawContent || ''
+      const results: any[] = []
+      let errors = 0
+
+      for (const candidate of candidates) {
+        const diversion = (candidate.parsedData as any)?.diversion || {}
+        const skillsText = candidate.skills.map(skill => skill.skillName).filter(Boolean).join(', ') || diversion.skills || ''
+
+        try {
+          const assessment = await assessInternalResource({
+            employeeIdRef: candidate.employeeIdRef || undefined,
+            fullName: candidate.fullName,
+            currentTitle: candidate.currentTitle || undefined,
+            skills: skillsText,
+            availability: diversion.availability || undefined,
+            diversionType: candidate.diversionType || undefined,
+            allocationPercent: diversion.allocationPercent,
+            billingRate: diversion.billingRate,
+            acsMonthlyCost: Number(candidate.acsMonthlyCost || diversion.acsMonthlyCost || 0),
+            jdTitle: jd.title,
+            jdContent,
+            jdSkills: jd.requiredSkills,
+          })
+
+          results.push({
+            candidateId: candidate.id,
+            employeeIdRef: candidate.employeeIdRef,
+            fullName: candidate.fullName,
+            currentTitle: candidate.currentTitle,
+            email: candidate.email,
+            skills: skillsText,
+            acsMonthlyCost: Number(candidate.acsMonthlyCost || diversion.acsMonthlyCost || 0),
+            billingRate: Number(diversion.billingRate || 0),
+            ...assessment,
+          })
+        } catch {
+          errors++
+        }
+      }
+
+      results.sort((a, b) => b.fitScore - a.fitScore)
+
+      await auditLog(session!.user.id, 'ANALYZE_INTERNAL_RESOURCES', 'JobDescription', jdId, undefined, { analyzed: results.length, errors }, req)
+      return ok({ jd: jdMeta, results, analyzed: results.length, errors })
     }
 
     const data = resourceSchema.parse(await req.json())
@@ -186,5 +260,25 @@ export async function POST(req: NextRequest) {
 
     await auditLog(session!.user.id, existing ? 'UPDATE_INTERNAL_RESOURCE' : 'DIVERT_RESOURCE', 'Candidate', candidate.id, undefined, data, req)
     return ok(candidate, existing ? 200 : 201)
+  } catch (e) { return handleError(e) }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'HR'])
+    if (error) return error
+
+    const { ids } = bulkDeleteSchema.parse(await req.json())
+    const internalIds = (await prisma.candidate.findMany({
+      where: { id: { in: ids }, isInternal: true },
+      select: { id: true },
+    })).map(candidate => candidate.id)
+
+    if (!internalIds.length) return err('No matching internal resources found', 404)
+
+    const { deletedIds } = await deleteCandidatesCascade(internalIds)
+
+    await auditLog(session!.user.id, 'BULK_DELETE_INTERNAL_RESOURCE', 'Candidate', undefined, undefined, { ids: deletedIds }, req)
+    return ok({ deleted: deletedIds.length })
   } catch (e) { return handleError(e) }
 }

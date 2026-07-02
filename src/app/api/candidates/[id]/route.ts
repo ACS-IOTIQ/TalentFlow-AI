@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, auditLog, handleError } from '@/lib/api-utils'
-import { deleteFile, BUCKETS } from '@/lib/storage'
+import { deleteCandidatesCascade } from '@/lib/candidate-cascade'
 import { z } from 'zod'
 
 const updateSchema = z.object({
@@ -88,42 +88,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'HR', 'DIR_TECH'])
     if (error) return error
 
-    const existing = await prisma.candidate.findUnique({
-      where: { id: params.id },
-      include: {
-        documents: { select: { fileKey: true } },
-        pipelineEntries: { select: { id: true } },
-      },
-    })
-    if (!existing) return err('Candidate not found', 404)
+    const { deletedIds, records } = await deleteCandidatesCascade([params.id])
+    if (!deletedIds.length) return err('Candidate not found', 404)
 
-    const pipelineEntryIds = existing.pipelineEntries.map(entry => entry.id)
-
-    await prisma.$transaction(async (tx) => {
-      if (pipelineEntryIds.length) {
-        const checklists = await tx.onboardingChecklist.findMany({
-          where: { pipelineEntryId: { in: pipelineEntryIds } },
-          select: { id: true },
-        })
-        await tx.onboardingItem.deleteMany({ where: { checklistId: { in: checklists.map(item => item.id) } } })
-        await tx.onboardingChecklist.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
-        await tx.clientSubmission.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
-        const interviews = await tx.interview.findMany({ where: { pipelineEntryId: { in: pipelineEntryIds } }, select: { id: true } })
-        await tx.interviewFeedback.deleteMany({ where: { interviewId: { in: interviews.map(item => item.id) } } })
-        await tx.interview.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
-        await tx.screeningCallNote.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
-        await tx.pipelineHistory.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
-        await tx.pipelineEntry.deleteMany({ where: { id: { in: pipelineEntryIds } } })
-      }
-
-      await tx.candidateRedFlag.deleteMany({ where: { candidateId: params.id } })
-      await tx.candidateSkill.deleteMany({ where: { candidateId: params.id } })
-      await tx.candidateDocument.deleteMany({ where: { candidateId: params.id } })
-      await tx.candidate.delete({ where: { id: params.id } })
-    })
-
-    await Promise.allSettled(existing.documents.map(document => deleteFile(BUCKETS.RESUMES, document.fileKey)))
-    await auditLog(session!.user.id, 'DELETE_CANDIDATE', 'Candidate', params.id, existing, undefined, req)
+    await auditLog(session!.user.id, 'DELETE_CANDIDATE', 'Candidate', params.id, records[0], undefined, req)
     return ok({ deleted: true })
   } catch (e) { return handleError(e) }
 }

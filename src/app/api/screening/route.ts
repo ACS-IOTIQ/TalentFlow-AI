@@ -163,7 +163,11 @@ export async function POST(req: NextRequest) {
 
     if (action === 'run') {
       const body = await req.json()
-      const { jdId, force } = z.object({ jdId: z.string(), force: z.boolean().default(true) }).parse(body)
+      const { jdId, force, candidateId } = z.object({
+        jdId: z.string(),
+        force: z.boolean().default(true),
+        candidateId: z.string().optional(),
+      }).parse(body)
 
       const jd = await prisma.jobDescription.findUnique({
         where: { id: jdId },
@@ -174,11 +178,11 @@ export async function POST(req: NextRequest) {
       const config = jd.screeningConfig || defaultConfig()
 
       const entries = await prisma.pipelineEntry.findMany({
-        where: { jdId, ...(force ? {} : { matchScore: null }) },
+        where: { jdId, ...(candidateId && { candidateId }), ...(force ? {} : { matchScore: null }) },
         include: { candidate: { include: { skills: true } } },
       })
 
-      if (!entries.length) return ok({ screened: 0, total: 0, errors: 0, message: 'No linked candidates found for this JD' })
+      if (!entries.length) return ok({ screened: 0, total: 0, errors: 0, message: candidateId ? 'Candidate is not linked to this JD' : 'No linked candidates found for this JD' })
 
       const jdContent = jd.finalContent || jd.polishedContent || jd.rawContent || ''
       let screened = 0

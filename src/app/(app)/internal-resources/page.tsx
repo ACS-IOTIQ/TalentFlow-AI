@@ -5,11 +5,12 @@ import { toast } from 'sonner'
 import {
   ArrowLeftRight,
   Bot,
-  Edit3,
   Loader2,
   Plus,
   Search,
+  Sparkles,
   Trash2,
+  Trophy,
   X,
 } from 'lucide-react'
 import { cn, initials } from '@/lib/utils'
@@ -302,6 +303,181 @@ function DivertModal({ resource, onClose }: { resource?: any; onClose: () => voi
   )
 }
 
+function fitBadgeClass(fitScore: number) {
+  if (fitScore >= 75) return 'bg-emerald-100 text-emerald-700'
+  if (fitScore >= 50) return 'bg-amber-100 text-amber-700'
+  return 'bg-red-100 text-red-700'
+}
+
+function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (seed: any) => void }) {
+  const [jdId, setJdId] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [result, setResult] = useState<{ jd: any; results: any[]; analyzed: number; errors: number } | null>(null)
+
+  const { data: jdsData } = useQuery({
+    queryKey: ['jds-active'],
+    queryFn: async () => {
+      const response = await fetch('/api/jds?status=POSTED&pageSize=50')
+      return response.json()
+    },
+  })
+
+  const analyze = async () => {
+    if (!jdId) {
+      toast.error('Select a JD to analyze against')
+      return
+    }
+
+    setAnalyzing(true)
+    setResult(null)
+    try {
+      const response = await fetch('/api/internal-resources?action=analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jdId }),
+      })
+      const data = await response.json()
+      if (data.success) {
+        setResult(data.data)
+        if (!data.data.results.length) toast.error('No internal resources available to analyze')
+      } else {
+        toast.error(data.error)
+      }
+    } catch {
+      toast.error('AI analysis failed')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  const divertCandidate = (candidate: any) => {
+    onDivert({
+      id: candidate.candidateId,
+      employeeIdRef: candidate.employeeIdRef,
+      fullName: candidate.fullName,
+      email: candidate.email,
+      currentTitle: candidate.currentTitle,
+      acsMonthlyCost: candidate.acsMonthlyCost,
+      diversionType: candidate.recommendedDiversionType,
+      diversionNotes: candidate.suggestedNotes || candidate.summary,
+      pipelineEntries: [{ jd: { id: jdId } }],
+      parsedData: {
+        diversion: {
+          skills: candidate.skills,
+          billingRate: candidate.billingRate,
+          allocationPercent: candidate.recommendedAllocationPercent,
+          aiAssessment: candidate,
+        },
+      },
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[1px]">
+      <div className="flex max-h-[85vh] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+        <div className="flex items-start justify-between border-b border-border px-7 py-6">
+          <div>
+            <h2 className="text-xl font-semibold">Analyze internal resources</h2>
+            <p className="mt-1 text-sm text-slate-500">Rank ACS employees by AI fit for a target JD</p>
+          </div>
+          <button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="space-y-5 overflow-y-auto p-7">
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <label className="mb-2 block text-sm font-semibold text-slate-600">Target JD *</label>
+              <select
+                value={jdId}
+                onChange={event => { setJdId(event.target.value); setResult(null) }}
+                className="w-full rounded-xl border border-input bg-slate-50 px-4 py-3 text-sm outline-none focus:border-brand-400"
+              >
+                <option value="">Select JD...</option>
+                {jdsData?.data?.map((jd: any) => (
+                  <option key={jd.id} value={jd.id}>{jd.title} - {jd.client}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={analyze}
+              disabled={analyzing || !jdId}
+              className="flex h-[46px] items-center gap-2 rounded-xl bg-brand-600 px-5 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700 disabled:opacity-50"
+            >
+              {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              Analyze
+            </button>
+          </div>
+
+          {analyzing && (
+            <div className="rounded-xl border border-border bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+              Screening every internal resource against this JD...
+            </div>
+          )}
+
+          {!analyzing && result && result.results.length > 0 && (
+            <div className="space-y-3">
+              <div className="text-sm text-slate-500">
+                {result.analyzed} resource{result.analyzed === 1 ? '' : 's'} analyzed against <span className="font-semibold text-slate-700">{result.jd.title}</span>
+                {result.errors > 0 && ` - ${result.errors} could not be scored`}
+              </div>
+              {result.results.map((candidate: any, index: number) => (
+                <div key={candidate.candidateId} className="rounded-2xl border border-border p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {index === 0 && <Trophy size={15} className="text-amber-500" />}
+                        <span className="font-bold text-slate-950">{candidate.fullName}</span>
+                        <span className={cn('rounded-md px-2 py-1 text-[10px] font-bold uppercase', fitBadgeClass(candidate.fitScore))}>
+                          Fit {candidate.fitScore}/100
+                        </span>
+                        <span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
+                          {candidate.recommendedDiversionType} - {candidate.recommendedAllocationPercent}%
+                        </span>
+                      </div>
+                      <div className="mt-1 text-sm font-medium text-slate-600">
+                        {candidate.currentTitle || 'ACS Resource'} - EMP {candidate.employeeIdRef || '-'}
+                      </div>
+                      <p className="mt-2 text-sm text-slate-500">{candidate.summary}</p>
+                      {candidate.strengths?.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {candidate.strengths.slice(0, 4).map((strength: string, i: number) => (
+                            <span key={i} className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-700">{strength}</span>
+                          ))}
+                        </div>
+                      )}
+                      {candidate.risks?.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {candidate.risks.slice(0, 3).map((risk: string, i: number) => (
+                            <span key={i} className="rounded-md bg-red-50 px-2 py-1 text-xs text-red-600">{risk}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => divertCandidate(candidate)}
+                      className="shrink-0 rounded-xl border border-brand-200 px-4 py-2.5 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+                    >
+                      Divert to this JD
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-border px-7 py-5">
+          <button onClick={onClose} className="rounded-xl border border-border px-5 py-3 text-sm font-medium hover:bg-accent">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Field({
   label,
   value,
@@ -334,9 +510,12 @@ function Field({
 
 export default function InternalResourcesPage() {
   const [showModal, setShowModal] = useState(false)
+  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
   const [editingResource, setEditingResource] = useState<any>(null)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery({
@@ -366,12 +545,68 @@ export default function InternalResourcesPage() {
       const data = await response.json()
       if (data.success) {
         toast.success('Internal resource deleted')
+        setSelectedIds(current => {
+          const next = new Set(current)
+          next.delete(resource.id)
+          return next
+        })
         qc.invalidateQueries({ queryKey: ['internal-resources'] })
       } else {
         toast.error(data.error)
       }
     } catch {
       toast.error('Unable to delete resource')
+    }
+  }
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const allVisibleSelected = filteredResources.length > 0 && filteredResources.every((resource: any) => selectedIds.has(resource.id))
+
+  const toggleSelectAllVisible = () => {
+    setSelectedIds(current => {
+      if (allVisibleSelected) {
+        const next = new Set(current)
+        filteredResources.forEach((resource: any) => next.delete(resource.id))
+        return next
+      }
+      const next = new Set(current)
+      filteredResources.forEach((resource: any) => next.add(resource.id))
+      return next
+    })
+  }
+
+  const removeSelected = async () => {
+    const ids = Array.from(selectedIds)
+    if (!ids.length) return
+    if (!confirm(`Delete ${ids.length} selected internal resource${ids.length === 1 ? '' : 's'}?`)) return
+
+    setBulkDeleting(true)
+    try {
+      const response = await fetch('/api/internal-resources', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      })
+      const data = await response.json()
+      if (data.success) {
+        toast.success(`${data.data.deleted} internal resource${data.data.deleted === 1 ? '' : 's'} deleted`)
+        setSelectedIds(new Set())
+        qc.invalidateQueries({ queryKey: ['internal-resources'] })
+      } else {
+        toast.error(data.error)
+      }
+    } catch {
+      toast.error('Unable to delete selected resources')
+    } finally {
+      setBulkDeleting(false)
     }
   }
 
@@ -382,12 +617,20 @@ export default function InternalResourcesPage() {
           <h1 className="text-3xl font-bold tracking-tight text-slate-950">Internal resources</h1>
           <p className="mt-2 text-base text-slate-500">ACS employees diverted to the Tahaluf engagement</p>
         </div>
-        <button
-          onClick={() => { setEditingResource(null); setShowModal(true) }}
-          className="mt-2 flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700"
-        >
-          <Plus size={16} /> Divert resource
-        </button>
+        <div className="mt-2 flex items-center gap-3">
+          <button
+            onClick={() => setShowAnalyzeModal(true)}
+            className="flex items-center gap-2 rounded-xl border border-brand-200 px-5 py-3 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+          >
+            <Sparkles size={16} /> Analyze internal resources
+          </button>
+          <button
+            onClick={() => { setEditingResource(null); setShowModal(true) }}
+            className="flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700"
+          >
+            <Plus size={16} /> Add
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -410,6 +653,33 @@ export default function InternalResourcesPage() {
           <option value="PARTIAL">Partial</option>
           <option value="TEMPORARY">Temporary</option>
         </select>
+        {filteredResources.length > 0 && (
+          <label className="flex h-12 items-center gap-2 rounded-xl border border-border bg-card px-4 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+              className="rounded"
+            />
+            Select all
+          </label>
+        )}
+        {selectedIds.size > 0 && (
+          <div className="flex h-12 items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 text-sm text-red-700">
+            <span className="font-semibold">{selectedIds.size} selected</span>
+            <button
+              onClick={removeSelected}
+              disabled={bulkDeleting}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {bulkDeleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+              Delete selected
+            </button>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs font-semibold text-red-700 hover:underline">
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {filteredResources.length === 0 && !isLoading ? (
@@ -417,7 +687,7 @@ export default function InternalResourcesPage() {
           <ArrowLeftRight size={42} className="mx-auto mb-3 opacity-30" />
           <p className="text-sm">No internal resources found</p>
           <button onClick={() => setShowModal(true)} className="mt-4 text-sm font-semibold text-brand-600 hover:underline">
-            Divert your first resource
+            Add your first resource
           </button>
         </div>
       ) : (
@@ -433,7 +703,17 @@ export default function InternalResourcesPage() {
             const jd = resource.pipelineEntries?.[0]?.jd
 
             return (
-              <div key={resource.id} className="flex items-center gap-5 rounded-2xl border border-border bg-card p-6 shadow-sm">
+              <div key={resource.id} className={cn(
+                'flex items-center gap-5 rounded-2xl border bg-card p-6 shadow-sm',
+                selectedIds.has(resource.id) ? 'border-brand-300 ring-1 ring-brand-200' : 'border-border',
+              )}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(resource.id)}
+                  onChange={() => toggleSelected(resource.id)}
+                  className="h-4 w-4 shrink-0 rounded"
+                  aria-label={`Select ${resource.fullName}`}
+                />
                 <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-teal-50 text-lg font-bold text-teal-700">
                   {initials(resource.fullName)}
                 </div>
@@ -469,10 +749,9 @@ export default function InternalResourcesPage() {
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     onClick={() => { setEditingResource(resource); setShowModal(true) }}
-                    className="rounded-xl border border-border p-2.5 text-slate-500 hover:bg-accent hover:text-slate-900"
-                    aria-label="Edit resource"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-slate-600 hover:bg-accent"
                   >
-                    <Edit3 size={16} />
+                    <ArrowLeftRight size={14} /> Divert resource
                   </button>
                   <button
                     onClick={() => remove(resource)}
@@ -494,6 +773,17 @@ export default function InternalResourcesPage() {
           onClose={() => {
             setShowModal(false)
             setEditingResource(null)
+          }}
+        />
+      )}
+
+      {showAnalyzeModal && (
+        <AnalyzeModal
+          onClose={() => setShowAnalyzeModal(false)}
+          onDivert={(seed) => {
+            setShowAnalyzeModal(false)
+            setEditingResource(seed)
+            setShowModal(true)
           }}
         />
       )}

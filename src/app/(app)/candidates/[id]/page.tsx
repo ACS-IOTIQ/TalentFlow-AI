@@ -16,6 +16,7 @@ import {
   Mail,
   Phone,
   Save,
+  Sparkles,
   Users,
   X,
 } from 'lucide-react'
@@ -317,6 +318,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
   const [activeTab, setActiveTab] = useState('Overview')
   const [downloadingResume, setDownloadingResume] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
+  const [screening, setScreening] = useState(false)
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['candidate', params.id],
@@ -384,6 +386,37 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
       window.alert('Unable to download resume')
     } finally {
       window.setTimeout(() => setDownloadingResume(false), 500)
+    }
+  }
+
+  const handleRunScreening = async () => {
+    if (!jd?.id) {
+      toast.error('Link this candidate to a JD before running AI screening')
+      return
+    }
+
+    setScreening(true)
+    try {
+      const response = await fetch('/api/screening?action=run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jdId: jd.id, candidateId: candidate.id, force: true }),
+      })
+      const data = await response.json()
+      if (!data.success) {
+        toast.error(data.error || 'Unable to run AI screening')
+        return
+      }
+      if (data.data.screened > 0) {
+        toast.success('AI screening complete')
+        qc.invalidateQueries({ queryKey: ['candidate', params.id] })
+      } else {
+        toast.error(data.data.message || 'No resume text available to screen against this JD')
+      }
+    } catch {
+      toast.error('Unable to run AI screening')
+    } finally {
+      setScreening(false)
     }
   }
 
@@ -512,21 +545,37 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
 
           <div className="space-y-5">
             <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-              <h2 className="mb-4 text-lg font-semibold">Score summary</h2>
-              <div className="grid gap-6 md:grid-cols-[150px_1fr]">
-                <div className="flex items-center justify-center border-r border-border">
-                  <div>
-                    <span className="text-5xl font-bold text-emerald-600">{score ?? '-'}</span>
-                    <span className="ml-2 text-2xl text-slate-400">/100</span>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">Score summary</h2>
+                {jd && (
+                  <button
+                    onClick={handleRunScreening}
+                    disabled={screening}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 px-3 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:opacity-50"
+                  >
+                    {screening ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                    {score !== null ? 'Re-run AI screening' : 'Run AI screening'}
+                  </button>
+                )}
+              </div>
+              {!jd ? (
+                <p className="text-sm text-slate-500">Link this candidate to a JD to run AI screening.</p>
+              ) : (
+                <div className="grid gap-6 md:grid-cols-[150px_1fr]">
+                  <div className="flex items-center justify-center border-r border-border">
+                    <div>
+                      <span className="text-5xl font-bold text-emerald-600">{score ?? '-'}</span>
+                      <span className="ml-2 text-2xl text-slate-400">/100</span>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <ScoreLine label="Skills match" value={entry?.matchScore ? Math.round(Number(entry.matchScore)) : null} />
+                    <ScoreLine label="Availability fit" value={entry?.availabilityScore ? Math.round(Number(entry.availabilityScore)) : null} />
+                    <ScoreLine label="Location match" value={entry?.locationScore ? Math.round(Number(entry.locationScore)) : null} />
+                    <ScoreLine label="Overall score" value={score} />
                   </div>
                 </div>
-                <div className="space-y-3">
-                  <ScoreLine label="Skills match" value={entry?.matchScore ? Math.round(Number(entry.matchScore)) : null} />
-                  <ScoreLine label="Availability fit" value={entry?.availabilityScore ? Math.round(Number(entry.availabilityScore)) : null} />
-                  <ScoreLine label="Location match" value={entry?.locationScore ? Math.round(Number(entry.locationScore)) : null} />
-                  <ScoreLine label="Overall score" value={score} />
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">

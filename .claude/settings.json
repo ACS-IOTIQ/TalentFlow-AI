@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f /tmp/cookies.txt)",
+      "Bash(curl -s -b /tmp/cookies.txt -X DELETE http://localhost:3000/api/internal-resources -H 'Content-Type: application/json' -d '{\"ids\":[\"cmr3frjaw0004e362tx80m7nt\",\"cmr3frjfk000de362yr4tj736\"]}')",
+      "Bash(curl -s -b /tmp/cookies.txt http://localhost:3000/api/internal-resources)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);console.log\\(j.data.map\\(r=>r.fullName\\)\\)}\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\); console.log\\(j.data[0]?.id, j.data[0]?.fullName\\)}\\)\")",
+      "Bash(node verify-labels.mjs)",
+      "Bash(node test-retry.mjs)",
+      "Bash(node make-pdf.mjs)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}
