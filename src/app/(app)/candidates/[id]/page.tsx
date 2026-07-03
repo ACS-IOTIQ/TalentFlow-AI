@@ -9,15 +9,19 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  ClipboardCheck,
+  Clock,
   Download,
   Edit3,
   Flag,
   Loader2,
   Mail,
+  MapPin,
   Phone,
   Save,
   Sparkles,
   Users,
+  Video,
   X,
 } from 'lucide-react'
 import { cn, formatDate, formatDateTime, initials, scoreColor, stageColor, stageLabel } from '@/lib/utils'
@@ -137,6 +141,134 @@ function ScoreLine({ label, value }: { label: string; value: number | null }) {
         <div className="h-full rounded-full bg-emerald-500" style={{ width: `${score}%` }} />
       </div>
       <span className="text-right text-slate-700">{value ?? '-'}</span>
+    </div>
+  )
+}
+
+const interviewStatusColors: Record<string, string> = {
+  SCHEDULED: 'border-blue-200 bg-blue-50 text-blue-700',
+  COMPLETED: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  CANCELLED: 'border-slate-200 bg-slate-50 text-slate-600',
+  NO_SHOW: 'border-red-200 bg-red-50 text-red-700',
+  RESCHEDULED: 'border-amber-200 bg-amber-50 text-amber-700',
+}
+
+function recommendationLabel(value: any) {
+  const text = renderValue(value)
+  if (!text) return ''
+  return humanizeKey(text)
+}
+
+function scoreOutOfTen(value: any) {
+  const score = numericScore(value)
+  return score === null ? '-' : `${score}/10`
+}
+
+function InterviewDetailCard({ interview }: { interview: any }) {
+  const jd = interview.jd
+  const roundLabel = interview.roundTemplate?.roundName || `Round ${interview.roundNumber}`
+  const feedback = Array.isArray(interview.feedback) ? interview.feedback : []
+  const statusClass = interviewStatusColors[interview.status] || interviewStatusColors.SCHEDULED
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-slate-950">{roundLabel}</h2>
+            <span className={cn('rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase', statusClass)}>
+              {humanizeKey(interview.status || 'Scheduled')}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            {jd?.title || 'Interview'}{jd?.client ? ` - ${jd.client}` : ''}
+          </p>
+        </div>
+        {interview.videoLink && (
+          <a href={interview.videoLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700">
+            <Video size={15} /> Join
+          </a>
+        )}
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 text-sm text-slate-600 md:grid-cols-2 xl:grid-cols-4">
+        <span className="inline-flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+          <CalendarDays size={15} /> {formatDateTime(interview.scheduledAt)}
+        </span>
+        <span className="inline-flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+          <Clock size={15} /> {interview.durationMinutes || 60} min
+        </span>
+        {(interview.interviewerName || interview.interviewerEmail) && (
+          <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <Mail size={15} className="shrink-0" />
+            <span className="truncate">{interview.interviewerName || interview.interviewerEmail}</span>
+          </span>
+        )}
+        {interview.location && (
+          <span className="inline-flex min-w-0 items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <MapPin size={15} className="shrink-0" />
+            <span className="truncate">{interview.location}</span>
+          </span>
+        )}
+      </div>
+
+      <div className="mt-5 border-t border-border pt-5">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <ClipboardCheck size={16} /> Assessment results
+        </div>
+        {feedback.length > 0 ? (
+          <div className="space-y-3">
+            {feedback.map((item: any) => (
+              <div key={item.id} className="rounded-xl border border-border bg-slate-50/70 p-4">
+                <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
+                  <div>
+                    <div className="text-xs text-slate-500">Technical</div>
+                    <div className="font-semibold text-slate-900">{scoreOutOfTen(item.technicalScore)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Communication</div>
+                    <div className="font-semibold text-slate-900">{scoreOutOfTen(item.communicationScore)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Culture fit</div>
+                    <div className="font-semibold text-slate-900">{scoreOutOfTen(item.cultureFitScore)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Overall</div>
+                    <div className="font-semibold text-slate-900">{scoreOutOfTen(item.overallScore)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-500">Recommendation</div>
+                    <div className="font-semibold text-slate-900">{recommendationLabel(item.recommendation) || '-'}</div>
+                  </div>
+                </div>
+                {(item.strengths || item.concerns || item.notes) && (
+                  <div className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                    {item.strengths && <ResultNote label="Strengths" value={item.strengths} />}
+                    {item.concerns && <ResultNote label="Concerns" value={item.concerns} />}
+                    {item.notes && <ResultNote label="Notes" value={item.notes} />}
+                  </div>
+                )}
+                <div className="mt-3 text-xs text-slate-400">
+                  {item.interviewer?.name ? `Submitted by ${item.interviewer.name}` : 'Assessment submitted'}
+                  {item.submittedAt ? ` - ${formatDateTime(item.submittedAt)}` : ''}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">No assessment result submitted yet.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ResultNote({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold text-slate-500">{label}</div>
+      <p className="mt-1 leading-6 text-slate-700">{value}</p>
     </div>
   )
 }
@@ -389,15 +521,24 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
   const availabilityScore = numericScore(entry?.availabilityScore) ?? numericScore(candidateAnalysis?.availabilityScore)
   const locationScore = numericScore(entry?.locationScore) ?? numericScore(candidateAnalysis?.locationScore)
   const score = numericScore(entry?.compositeScore) ?? numericScore(candidateAnalysis?.overallScore)
+  const screeningGeneratedAt =
+    entry?.updatedAt || candidateAnalysis?.createdAt || candidateAnalysis?.updatedAt || candidateAnalysis?.analyzedAt || candidate.updatedAt
   const rawInferredFields = parsedData.rawInferredFields && typeof parsedData.rawInferredFields === 'object'
     ? parsedData.rawInferredFields
     : {}
   const extraFieldEntries = Object.entries(rawInferredFields).filter(([, value]) => renderValue(value))
+  const interviewItems = (candidate.pipelineEntries || [])
+    .flatMap((pipelineEntry: any) => (pipelineEntry.interviews || []).map((interview: any) => ({
+      ...interview,
+      jd: pipelineEntry.jd,
+      pipelineStage: pipelineEntry.stage,
+    })))
+    .sort((left: any, right: any) => new Date(right.scheduledAt).getTime() - new Date(left.scheduledAt).getTime())
   const timeline = [
     candidate.documents?.[0] && ['Resume uploaded', candidate.documents[0].createdAt],
     extractionMeta.extractedAt && ['Resume parsed', extractionMeta.extractedAt],
     entry && ['Linked to JD', entry.createdAt],
-    score !== null && ['Screening score generated', entry.updatedAt],
+    score !== null && screeningGeneratedAt && ['Screening score generated', screeningGeneratedAt],
     ...(entry?.history || []).slice(0, 5).map((item: any) => [`Stage changed to ${stageLabel(item.toStage)}`, item.createdAt]),
   ].filter(Boolean) as Array<[string, string]>
 
@@ -823,7 +964,26 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
         </div>
       )}
 
-      {activeTab !== 'Overview' && activeTab !== 'Resume' && activeTab !== 'AI Screening' && (
+      {activeTab === 'Interviews' && (
+        <div className="space-y-5">
+          {interviewItems.length > 0 ? (
+            interviewItems.map((interview: any) => <InterviewDetailCard key={interview.id} interview={interview} />)
+          ) : (
+            <div className="rounded-2xl border border-dashed border-border bg-card p-10 text-center shadow-sm">
+              <CalendarDays className="mx-auto text-slate-400" size={30} />
+              <h2 className="mt-3 text-lg font-semibold text-slate-950">No interviews scheduled</h2>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                Scheduled interviews and submitted assessment results will appear here for this candidate.
+              </p>
+              <Link href="/interviews" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white hover:bg-brand-700">
+                <CalendarDays size={16} /> Schedule interview
+              </Link>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab !== 'Overview' && activeTab !== 'Resume' && activeTab !== 'AI Screening' && activeTab !== 'Interviews' && (
         <div className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-slate-500 shadow-sm">
           {activeTab} details are tracked in the workflow modules.
         </div>

@@ -1,48 +1,138 @@
 import { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { requireAuth, ok, err, paginatedOk, getPagination, auditLog, handleError } from '@/lib/api-utils'
+import { requireAuth, ok, err, getPagination, auditLog, handleError } from '@/lib/api-utils'
 import { z } from 'zod'
 
 const submitSchema = z.object({
   pipelineEntryId: z.string(),
-  clientContact: z.string().optional(),
-  clientNotes: z.string().optional(),
+  clientContact: z.string().optional().nullable(),
+  clientNotes: z.string().optional().nullable(),
+  profilePdfKey: z.string().optional().nullable(),
 })
 
-const updateStatusSchema = z.object({
-  status: z.enum(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED']),
-  clientNotes: z.string().optional(),
-  rejectionReason: z.string().optional(),
-})
+const activeSubmissionStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] as const
+const allowedSubmitStages = ['INTERNAL_APPROVED', 'SCREENING_CALL', 'INTERVIEWING', 'INTERVIEW_SCHEDULED', 'CLIENT_REJECTED'] as const
+
+function cleanText(value?: string | null) {
+  return value?.trim() || null
+}
+
+function submissionInclude() {
+  return {
+    pipelineEntry: {
+      include: {
+        candidate: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            currentTitle: true,
+            currentCompany: true,
+            isInternal: true,
+          },
+        },
+        jd: { select: { id: true, title: true, client: true } },
+      },
+    },
+    submittedBy: { select: { id: true, name: true, avatarUrl: true } },
+  }
+}
+
+async function movePipelineStage(tx: any, pipelineEntry: { id: string; stage: string }, toStage: string, userId: string, notes: string) {
+  if (pipelineEntry.stage === toStage) return
+  await tx.pipelineEntry.update({
+    where: { id: pipelineEntry.id },
+    data: { stage: toStage },
+  })
+  await tx.pipelineHistory.create({
+    data: {
+      pipelineEntryId: pipelineEntry.id,
+      fromStage: pipelineEntry.stage,
+      toStage,
+      changedById: userId,
+      notes,
+    },
+  })
+}
 
 export async function GET(req: NextRequest) {
   try {
     const { error } = await requireAuth()
     if (error) return error
 
+    const options = req.nextUrl.searchParams.get('options')
+    if (options === 'true') {
+      const entries = await prisma.pipelineEntry.findMany({
+        where: {
+          stage: { in: [...allowedSubmitStages] as any },
+          submissions: { none: { status: { in: [...activeSubmissionStatuses] as any } } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          candidate: { select: { id: true, fullName: true, email: true, currentTitle: true, isInternal: true } },
+          jd: { select: { id: true, title: true, client: true } },
+        },
+      })
+      return ok({ entries })
+    }
+
     const { page, pageSize, skip } = getPagination(req.nextUrl)
     const status = req.nextUrl.searchParams.get('status')
+    const search = req.nextUrl.searchParams.get('search')?.trim()
 
-    const [submissions, total] = await Promise.all([
+    const where = {
+      ...(status && { status: status as any }),
+      ...(search && {
+        OR: [
+          { clientContact: { contains: search, mode: 'insensitive' as const } },
+          { clientNotes: { contains: search, mode: 'insensitive' as const } },
+          {
+            pipelineEntry: {
+              candidate: {
+                OR: [
+                  { fullName: { contains: search, mode: 'insensitive' as const } },
+                  { email: { contains: search, mode: 'insensitive' as const } },
+                  { currentTitle: { contains: search, mode: 'insensitive' as const } },
+                ],
+              },
+            },
+          },
+          {
+            pipelineEntry: {
+              jd: {
+                OR: [
+                  { title: { contains: search, mode: 'insensitive' as const } },
+                  { client: { contains: search, mode: 'insensitive' as const } },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    }
+
+    const [submissions, total, counts] = await Promise.all([
       prisma.clientSubmission.findMany({
-        where: status ? { status: status as any } : {},
+        where,
         skip,
         take: pageSize,
         orderBy: { submittedAt: 'desc' },
-        include: {
-          pipelineEntry: {
-            include: {
-              candidate: { select: { id: true, fullName: true, currentTitle: true, isInternal: true } },
-              jd: { select: { id: true, title: true, client: true } },
-            },
-          },
-          submittedBy: { select: { name: true, avatarUrl: true } },
-        },
+        include: submissionInclude(),
       }),
-      prisma.clientSubmission.count({ where: status ? { status: status as any } : {} }),
+      prisma.clientSubmission.count({ where }),
+      prisma.clientSubmission.groupBy({
+        by: ['status'],
+        _count: { status: true },
+      }),
     ])
 
-    return paginatedOk(submissions, total, page, pageSize)
+    return NextResponse.json({
+      success: true,
+      data: submissions,
+      counts,
+      pagination: { total, page, pageSize, totalPages: Math.ceil(total / pageSize) },
+    })
   } catch (e) { return handleError(e) }
 }
 
@@ -51,33 +141,33 @@ export async function POST(req: NextRequest) {
     const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'DIR_TECH'])
     if (error) return error
 
-    const body = await req.json()
-    const data = submitSchema.parse(body)
+    const data = submitSchema.parse(await req.json())
+    const pipelineEntry = await prisma.pipelineEntry.findUnique({
+      where: { id: data.pipelineEntryId },
+      select: { id: true, stage: true },
+    })
+    if (!pipelineEntry) return err('Pipeline entry not found', 404)
 
     const existing = await prisma.clientSubmission.findFirst({
-      where: { pipelineEntryId: data.pipelineEntryId, status: { not: 'REJECTED' } },
+      where: { pipelineEntryId: data.pipelineEntryId, status: { in: [...activeSubmissionStatuses] as any } },
     })
-    if (existing) return err('Candidate already submitted', 409)
+    if (existing) return err('Candidate already has an active submission', 409)
 
-    const submission = await prisma.clientSubmission.create({
-      data: {
-        ...data,
-        submittedById: session!.user.id,
-        status: 'SUBMITTED',
-      },
-      include: {
-        pipelineEntry: {
-          include: {
-            candidate: { select: { fullName: true } },
-            jd: { select: { title: true } },
-          },
+    const submission = await prisma.$transaction(async (tx) => {
+      const created = await tx.clientSubmission.create({
+        data: {
+          pipelineEntryId: data.pipelineEntryId,
+          submittedById: session!.user.id,
+          status: 'SUBMITTED',
+          clientContact: cleanText(data.clientContact),
+          clientNotes: cleanText(data.clientNotes),
+          profilePdfKey: cleanText(data.profilePdfKey),
         },
-      },
-    })
+        include: submissionInclude(),
+      })
 
-    await prisma.pipelineEntry.update({
-      where: { id: data.pipelineEntryId },
-      data: { stage: 'SUBMITTED_TO_CLIENT' },
+      await movePipelineStage(tx, pipelineEntry, 'SUBMITTED_TO_CLIENT', session!.user.id, 'Submitted to Tahaluf')
+      return created
     })
 
     await auditLog(session!.user.id, 'SUBMIT_TO_CLIENT', 'ClientSubmission', submission.id, undefined, data, req)

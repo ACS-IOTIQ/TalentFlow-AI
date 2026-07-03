@@ -41,6 +41,7 @@ function ScheduleModal({ onClose }: { onClose: () => void }) {
   const [form, setForm] = useState({
     pipelineEntryId: '',
     roundNumber: 1,
+    roundName: 'Round 1',
     date: toLocalDateInput(),
     time: '10:00',
     durationMinutes: 60,
@@ -60,9 +61,23 @@ function ScheduleModal({ onClose }: { onClose: () => void }) {
 
   const entries = data?.data?.entries || []
   const selectedEntry = entries.find((entry: any) => entry.id === form.pipelineEntryId)
-  const roundOptions = selectedEntry?.jd?.interviewRounds?.length
-    ? selectedEntry.jd.interviewRounds
-    : [1, 2, 3].map(roundNumber => ({ id: String(roundNumber), roundNumber, roundName: `Round ${roundNumber}`, durationMinutes: 60 }))
+  const roundOptions = useMemo(
+    () => selectedEntry?.jd?.interviewRounds?.length
+      ? selectedEntry.jd.interviewRounds
+      : [1, 2, 3].map(roundNumber => ({ id: String(roundNumber), roundNumber, roundName: `Round ${roundNumber}`, durationMinutes: 60 })),
+    [selectedEntry?.jd?.interviewRounds],
+  )
+
+  useEffect(() => {
+    const firstRound = roundOptions[0]
+    if (!firstRound) return
+    setForm(current => ({
+      ...current,
+      roundNumber: Number(firstRound.roundNumber),
+      roundName: firstRound.roundName || `Round ${firstRound.roundNumber}`,
+      durationMinutes: Number(firstRound.durationMinutes || current.durationMinutes),
+    }))
+  }, [form.pipelineEntryId, roundOptions])
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -79,6 +94,7 @@ function ScheduleModal({ onClose }: { onClose: () => void }) {
         body: JSON.stringify({
           pipelineEntryId: form.pipelineEntryId,
           roundNumber: Number(form.roundNumber),
+          roundName: form.roundName,
           scheduledAt: toIsoFromLocal(form.date, form.time),
           durationMinutes: Number(form.durationMinutes),
           location: form.location,
@@ -141,15 +157,20 @@ function ScheduleModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <label className="block">
-              <span className="mb-2 block text-sm font-semibold text-slate-600">Round</span>
+              <span className="mb-2 block text-sm font-semibold text-slate-600">Round number</span>
               <select
                 value={form.roundNumber}
                 onChange={event => {
                   const roundNumber = Number(event.target.value)
                   const round = roundOptions.find((item: any) => Number(item.roundNumber) === roundNumber)
-                  setForm(current => ({ ...current, roundNumber, durationMinutes: Number(round?.durationMinutes || current.durationMinutes) }))
+                  setForm(current => ({
+                    ...current,
+                    roundNumber,
+                    roundName: round?.roundName || `Round ${roundNumber}`,
+                    durationMinutes: Number(round?.durationMinutes || current.durationMinutes),
+                  }))
                 }}
                 className="h-12 w-full rounded-xl border border-input bg-slate-50 px-4 text-sm outline-none focus:border-brand-400"
               >
@@ -159,6 +180,17 @@ function ScheduleModal({ onClose }: { onClose: () => void }) {
                   </option>
                 ))}
               </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-2 block text-sm font-semibold text-slate-600">Round name</span>
+              <input
+                required
+                value={form.roundName}
+                onChange={event => setForm(current => ({ ...current, roundName: event.target.value }))}
+                placeholder="Technical interview"
+                className="h-12 w-full rounded-xl border border-input bg-slate-50 px-4 text-sm outline-none focus:border-brand-400"
+              />
             </label>
 
             <label className="block">
@@ -419,6 +451,7 @@ function InterviewCard({ interview, compact = false, onAssess }: { interview: an
   const candidate = interview.pipelineEntry?.candidate
   const jd = interview.pipelineEntry?.jd
   const scheduledAt = new Date(interview.scheduledAt)
+  const roundLabel = interview.roundTemplate?.roundName || `Round ${interview.roundNumber}`
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-colors hover:border-brand-200 hover:bg-slate-50/50">
@@ -439,7 +472,7 @@ function InterviewCard({ interview, compact = false, onAssess }: { interview: an
           </div>
 
           <div className="mt-2 text-sm font-medium text-slate-700">{jd?.title || 'Unknown JD'}</div>
-          <div className="text-sm text-slate-500">{jd?.client || 'Client'} - Round {interview.roundNumber} - {interview.durationMinutes} min</div>
+          <div className="text-sm text-slate-500">{jd?.client || 'Client'} - {roundLabel} - {interview.durationMinutes} min</div>
           {(interview.interviewerName || interview.interviewerEmail) && (
             <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
               <Mail size={13} />
@@ -487,6 +520,7 @@ function AssessmentModal({ interview, onClose }: { interview: any; onClose: () =
   })
   const candidate = interview.pipelineEntry?.candidate
   const jd = interview.pipelineEntry?.jd
+  const roundLabel = interview.roundTemplate?.roundName || `Round ${interview.roundNumber}`
 
   const set = (key: string, value: string) => setForm(current => ({ ...current, [key]: value }))
 
@@ -530,7 +564,7 @@ function AssessmentModal({ interview, onClose }: { interview: any; onClose: () =
         <div className="flex items-center justify-between border-b border-border px-6 py-5">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">Candidate assessment</h2>
-            <p className="mt-1 text-sm text-slate-500">{candidate?.fullName || 'Candidate'} - {jd?.title || 'Interview'} - Round {interview.roundNumber}</p>
+            <p className="mt-1 text-sm text-slate-500">{candidate?.fullName || 'Candidate'} - {jd?.title || 'Interview'} - {roundLabel}</p>
           </div>
           <button onClick={onClose} disabled={saving} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-50">
             <X size={18} />

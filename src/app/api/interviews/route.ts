@@ -8,6 +8,7 @@ const scheduleSchema = z.object({
   pipelineEntryId: z.string(),
   roundTemplateId: z.string().optional(),
   roundNumber: z.number().min(1).max(10),
+  roundName: z.string().min(1).max(80).optional(),
   scheduledAt: z.string().datetime(),
   durationMinutes: z.number().min(15).max(240).default(60),
   location: z.string().optional().nullable(),
@@ -142,17 +143,19 @@ export async function POST(req: NextRequest) {
     if (!pipelineEntry) return err('Pipeline entry not found', 404)
 
     const interview = await prisma.$transaction(async (tx) => {
+      const roundName = data.roundName?.trim() || `Round ${data.roundNumber}`
       const roundTemplate = data.roundTemplateId
         ? await tx.interviewRoundTemplate.findUnique({ where: { id: data.roundTemplateId } })
         : await tx.interviewRoundTemplate.upsert({
           where: { jdId_roundNumber: { jdId: pipelineEntry.jdId, roundNumber: data.roundNumber } },
           update: {
+            roundName,
             durationMinutes: data.durationMinutes,
           },
           create: {
             jdId: pipelineEntry.jdId,
             roundNumber: data.roundNumber,
-            roundName: `Round ${data.roundNumber}`,
+            roundName,
             durationMinutes: data.durationMinutes,
           },
         })
@@ -194,14 +197,14 @@ export async function POST(req: NextRequest) {
           fromStage: pipelineEntry.stage,
           toStage: 'INTERVIEW_SCHEDULED',
           changedById: session!.user.id,
-          notes: `Interview scheduled: Round ${data.roundNumber}`,
+          notes: `Interview scheduled: ${roundTemplate.roundName}`,
         },
       })
 
       return created
     })
 
-    await auditLog(session!.user.id, 'SCHEDULE_INTERVIEW', 'Interview', interview.id, undefined, { roundNumber: data.roundNumber }, req)
+    await auditLog(session!.user.id, 'SCHEDULE_INTERVIEW', 'Interview', interview.id, undefined, { roundNumber: data.roundNumber, roundName: interview.roundTemplate?.roundName }, req)
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || ''
     await sendInterviewScheduledEmails({
       candidateName: pipelineEntry.candidate.fullName,
