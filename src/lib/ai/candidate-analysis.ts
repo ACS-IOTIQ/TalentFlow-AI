@@ -54,12 +54,98 @@ function parseJson(text: string) {
 
   try {
     const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
-    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1))
+    if (start >= 0) {
+      let depth = 0
+      let inString = false
+      let escaped = false
+      for (let index = start; index < cleaned.length; index++) {
+        const char = cleaned[index]
+        if (escaped) {
+          escaped = false
+          continue
+        }
+        if (inString && char === '\\') {
+          escaped = true
+          continue
+        }
+        if (char === '"') inString = !inString
+        if (inString) continue
+        if (char === '{') depth++
+        if (char === '}') depth--
+        if (depth === 0) return JSON.parse(cleaned.slice(start, index + 1))
+      }
+    }
   } catch {
   }
 
   throw new Error('AI candidate analysis returned invalid JSON')
+}
+
+function fallbackCandidateAnalysis({
+  candidateProfile,
+  jdContext,
+  provider,
+  model,
+}: {
+  candidateProfile: string
+  jdContext?: string
+  provider: string
+  model: string
+}): CandidateAnalysisResult {
+  const profileLower = candidateProfile.toLowerCase()
+  const hasEmail = /email:\s*(?!not provided)/i.test(candidateProfile)
+  const hasPhone = /phone:\s*(?!not provided)/i.test(candidateProfile)
+  const hasLocation = /location:\s*(?!not provided)/i.test(candidateProfile)
+  const hasExperience = /experience years:\s*(?!not provided)/i.test(candidateProfile) || /experience:/i.test(candidateProfile)
+  const hasSkills = /skills:\s*(?!not provided)/i.test(candidateProfile)
+  const hasNotice = /notice period days:\s*(?!not provided)/i.test(candidateProfile) || /availability/i.test(profileLower)
+  const hasCompensation = /expected salary:\s*(?!not provided)/i.test(candidateProfile) || /salary/i.test(profileLower)
+  const completeness = [hasEmail, hasPhone, hasLocation, hasExperience, hasSkills, hasNotice, hasCompensation].filter(Boolean).length
+  const baseScore = Math.max(45, Math.min(78, 40 + completeness * 6 + (jdContext ? 4 : 0)))
+  const missingFields = [
+    !hasEmail && 'email',
+    !hasPhone && 'phone',
+    !hasLocation && 'location',
+    !hasExperience && 'experience',
+    !hasSkills && 'skills',
+    !hasNotice && 'notice period',
+    !hasCompensation && 'compensation',
+  ].filter(Boolean) as string[]
+
+  const flags: CandidateAnalysisFlag[] = missingFields.slice(0, 4).map(field => ({
+    type: 'MISSING_INFO',
+    severity: 'WARNING',
+    description: `Candidate profile is missing ${field} details. Confirm this during HR screening.`,
+  }))
+
+  return {
+    overallScore: baseScore,
+    skillScore: hasSkills ? baseScore : Math.max(35, baseScore - 12),
+    availabilityScore: hasNotice ? baseScore : Math.max(35, baseScore - 10),
+    locationScore: hasLocation ? baseScore : Math.max(35, baseScore - 10),
+    summary: 'AI returned malformed JSON, so TalentFlow generated a conservative screening pack from available candidate fields.',
+    screeningNotes: 'Use this as a fallback HR screening guide. Confirm missing details before moving the candidate forward.',
+    strengths: [
+      hasExperience ? 'Candidate profile includes experience history.' : 'Candidate has enough profile data to begin HR screening.',
+      hasSkills ? 'Skills are available for initial recruiter review.' : 'Recruiter can validate skills during the screening call.',
+    ],
+    risks: missingFields.length ? missingFields.map(field => `Missing ${field} details.`).slice(0, 8) : ['No major profile completeness risks detected from available fields.'],
+    flags,
+    screeningQuestions: [
+      'Can you briefly walk me through your current role and responsibilities?',
+      'What is your current notice period and earliest joining availability?',
+      'What are your current and expected compensation details?',
+      'Are you comfortable with the role location or any relocation needs?',
+      'What is motivating you to consider a new opportunity now?',
+      'Are there any work authorization or visa constraints we should know about?',
+      'Can you confirm the best email and phone number for interview coordination?',
+    ],
+    missingFields,
+    recommendedNextStep: 'Proceed with HR screening call and validate missing details.',
+    provider,
+    model,
+    generatedAt: new Date().toISOString(),
+  }
 }
 
 async function repairCandidateAnalysisJson({
@@ -152,12 +238,22 @@ ${jdContext ? `Job description context:\n${jdContext}` : 'No JD is linked. Score
     parsed = parseJson(response.text)
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('invalid JSON')) throw error
-    response = await repairCandidateAnalysisJson({
-      invalidResponse: response.text,
-      candidateProfile,
-      jdContext,
-    })
-    parsed = parseJson(response.text)
+    try {
+      response = await repairCandidateAnalysisJson({
+        invalidResponse: response.text,
+        candidateProfile,
+        jdContext,
+      })
+      parsed = parseJson(response.text)
+    } catch (repairError) {
+      if (!(repairError instanceof Error) || !repairError.message.includes('invalid JSON')) throw repairError
+      return fallbackCandidateAnalysis({
+        candidateProfile,
+        jdContext,
+        provider: response.provider,
+        model: response.model,
+      })
+    }
   }
   const fallbackScore = score(parsed.overallScore, 50)
   const questions = stringArray(parsed.screeningQuestions, 10)
