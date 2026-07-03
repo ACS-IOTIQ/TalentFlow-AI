@@ -5,11 +5,20 @@ import { logger } from '@/lib/logger'
 
 export type AIProvider = 'anthropic' | 'gemini' | 'ollama'
 
+export interface AIUsageDetails {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cachedTokens?: number
+  metadata?: Record<string, unknown>
+}
+
 export interface GenerateAITextOptions {
   system?: string
   prompt: string
   maxTokens?: number
   json?: boolean
+  feature?: string
   inlineData?: {
     mimeType: string
     data: string
@@ -35,7 +44,7 @@ function resolveProvider(): AIProvider {
 }
 
 function resolveModel(provider: AIProvider) {
-  if (provider === 'ollama') return process.env.AI_MODEL || process.env.OLLAMA_MODEL || 'qwen2.5:3b-instruct'
+  if (provider === 'ollama') return process.env.AI_MODEL || process.env.OLLAMA_MODEL || 'qwen2.5:1.5b-instruct'
 
   const model = process.env.AI_MODEL || (provider === 'gemini'
     ? process.env.GEMINI_MODEL || 'gemini-2.5-flash'
@@ -48,6 +57,35 @@ interface ProviderTextResult {
   text: string
   model: string
   usage?: AIUsageDetails
+}
+
+async function recordAIUsage(
+  provider: AIProvider,
+  result: ProviderTextResult,
+  options: GenerateAITextOptions,
+  durationMs: number,
+) {
+  try {
+    const session = await auth()
+    await prisma.aIUsageLog.create({
+      data: {
+        userId: session?.user?.id || null,
+        feature: options.feature || null,
+        provider,
+        model: result.model,
+        promptTokens: result.usage?.promptTokens || 0,
+        completionTokens: result.usage?.completionTokens || 0,
+        totalTokens: result.usage?.totalTokens || 0,
+        cachedTokens: result.usage?.cachedTokens ?? null,
+        requestChars: options.prompt.length,
+        responseChars: result.text.length,
+        durationMs,
+        metadata: (result.usage?.metadata as any) || {},
+      },
+    })
+  } catch (error) {
+    logger.error('Failed to record AI usage log', error)
+  }
 }
 
 async function generateWithAnthropic(options: GenerateAITextOptions, model: string): Promise<ProviderTextResult> {
@@ -228,7 +266,22 @@ async function callOllama(baseUrl: string, model: string, options: GenerateAITex
     const data = await response.json()
     const text = data?.message?.content
     if (!text) return { ok: false as const, notPulled: false, connRefused: false, timedOut: false, message: 'Ollama API returned no text' }
-    return { ok: true as const, text }
+
+    const promptTokens = Number(data?.prompt_eval_count || 0)
+    const completionTokens = Number(data?.eval_count || 0)
+    return {
+      ok: true as const,
+      text,
+      usage: {
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        metadata: {
+          promptEvalDurationNs: data?.prompt_eval_duration,
+          evalDurationNs: data?.eval_duration,
+        },
+      },
+    }
   } catch (error) {
     const isAbort = error instanceof Error && error.name === 'AbortError'
     const isConnRefused = error instanceof Error && /ECONNREFUSED|fetch failed/i.test(error.message)
@@ -246,7 +299,7 @@ async function callOllama(baseUrl: string, model: string, options: GenerateAITex
   }
 }
 
-async function generateWithOllama(options: GenerateAITextOptions, model: string): Promise<string> {
+async function generateWithOllama(options: GenerateAITextOptions, model: string): Promise<ProviderTextResult> {
   if (options.inlineData) {
     // Local text-only models can't accept Gemini-style inline binary (PDF/DOCX) input.
     // Callers already fall back to a non-AI extraction path on any AI failure here.
@@ -258,7 +311,7 @@ async function generateWithOllama(options: GenerateAITextOptions, model: string)
 
   for (let attempt = 0; attempt <= OLLAMA_WARMUP_RETRY_DELAYS_MS.length; attempt++) {
     const result = await callOllama(baseUrl, model, options)
-    if (result.ok) return result.text
+    if (result.ok) return { text: result.text, model, usage: result.usage }
 
     if (result.notPulled) {
       throw new Error(`Ollama model "${model}" is not pulled yet. Wait for the ollama-setup service to finish, or run 'ollama pull ${model}'.`)
@@ -282,7 +335,7 @@ export async function generateAIText(options: GenerateAITextOptions): Promise<Ge
   const startedAt = Date.now()
   const provider = resolveProvider()
   const model = resolveModel(provider)
-  const text = provider === 'ollama'
+  const result = provider === 'ollama'
     ? await generateWithOllama(options, model)
     : provider === 'gemini'
       ? await generateWithGemini(options, model)
