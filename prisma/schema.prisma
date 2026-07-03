@@ -114,6 +114,7 @@ model User {
   onboardingsManaged OnboardingChecklist[] @relation("ManagedBy")
   onboardingItemsCompleted OnboardingItem[] @relation("CompletedBy")
   auditLogs         AuditLog[]
+  aiUsageLogs       AIUsageLog[]
   notifications     Notification[]
   pipelineChanges   PipelineHistory[]
   flagsConfirmed    CandidateRedFlag[]  @relation("FlagConfirmedBy")
@@ -588,6 +589,31 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([userId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model AIUsageLog {
+  id               String   @id @default(cuid())
+  userId           String?  @map("user_id")
+  feature          String?
+  provider         String
+  model            String
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  totalTokens      Int      @default(0) @map("total_tokens")
+  cachedTokens     Int?     @map("cached_tokens")
+  requestChars     Int?     @map("request_chars")
+  responseChars    Int?     @map("response_chars")
+  durationMs       Int?     @map("duration_ms")
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt(sort: Desc)])
+  @@index([feature, createdAt(sort: Desc)])
+  @@index([provider, model])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("ai_usage_logs")
 }
 
 model Notification {

@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, GitMerge, FileText, Users, ArrowLeftRight,
   Bot, CalendarDays, Send, ClipboardCheck, ShieldCheck, TrendingUp,
-  ChevronRight,
+  ChevronRight, Gauge,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { UserRole } from '@prisma/client'
@@ -20,22 +20,23 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Pipeline', href: '/pipeline', icon: GitMerge },
   { label: 'Job descriptions', href: '/jds', icon: FileText },
   { label: 'Candidates', href: '/candidates', icon: Users },
   { label: 'Internal resources', href: '/internal-resources', icon: ArrowLeftRight },
   { label: 'AI screening', href: '/screening', icon: Bot },
+  { label: 'Pipeline', href: '/pipeline', icon: GitMerge },
   { label: 'Interviews', href: '/interviews', icon: CalendarDays },
   { label: 'Submissions', href: '/submissions', icon: Send },
   { label: 'Onboarding', href: '/onboarding', icon: ClipboardCheck },
+  { label: 'AI Usage', href: '/ai-usage', icon: Gauge, roles: ['SUPER_ADMIN', 'CSO', 'CMD', 'DIR_TECH'] as UserRole[] },
   { label: 'Users & roles', href: '/users', icon: ShieldCheck, roles: ['SUPER_ADMIN', 'CSO'] as UserRole[] },
   { label: 'Revenue', href: '/revenue', icon: TrendingUp, roles: ['SUPER_ADMIN', 'CSO', 'CMD'] as UserRole[] },
 ]
 
 const navGroups = [
-  { label: 'Overview', items: ['/dashboard', '/pipeline', '/jds', '/candidates', '/internal-resources'] },
-  { label: 'Workflow', items: ['/screening', '/interviews', '/submissions', '/onboarding'] },
-  { label: 'Admin', items: ['/users', '/revenue'] },
+  { label: 'Overview', items: ['/dashboard', '/jds', '/candidates', '/internal-resources'] },
+  { label: 'Workflow', items: ['/screening', '/pipeline', '/interviews', '/submissions', '/onboarding'] },
+  { label: 'Admin', items: ['/ai-usage', '/users', '/revenue'] },
 ]
 
 interface Props {
