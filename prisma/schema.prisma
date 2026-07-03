@@ -113,6 +113,7 @@ model User {
   submissions       ClientSubmission[]  @relation("SubmittedBy")
   onboardingsManaged OnboardingChecklist[] @relation("ManagedBy")
   onboardingItemsCompleted OnboardingItem[] @relation("CompletedBy")
+  onboardingDocumentsUploaded OnboardingDocument[] @relation("OnboardingDocumentUploadedBy")
   auditLogs         AuditLog[]
   aiUsageLogs       AIUsageLog[]
   notifications     Notification[]
@@ -499,14 +500,26 @@ model OnboardingChecklist {
   id              String   @id @default(cuid())
   pipelineEntryId String   @unique @map("pipeline_entry_id")
   startDate       DateTime? @map("start_date")
+  dateOfJoining   DateTime? @map("date_of_joining")
+  employmentType  String?  @map("employment_type")
+  workLocation    String?  @map("work_location")
+  employeeCode    String?  @map("employee_code")
+  designation     String?
+  department      String?
+  reportingManager String? @map("reporting_manager")
+  salaryOrBillingNotes String? @db.Text @map("salary_or_billing_notes")
+  joiningStatus   String   @default("DOCUMENT_COLLECTION") @map("joining_status")
+  hrNotes         String?  @db.Text @map("hr_notes")
   managedById     String?  @map("managed_by_id")
   isComplete      Boolean  @default(false) @map("is_complete")
+  completedAt     DateTime? @map("completed_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   pipelineEntry PipelineEntry    @relation(fields: [pipelineEntryId], references: [id])
   managedBy     User?            @relation("ManagedBy", fields: [managedById], references: [id])
   items         OnboardingItem[]
+  documents     OnboardingDocument[]
 
   @@map("onboarding_checklists")
 }
@@ -527,8 +540,30 @@ model OnboardingItem {
 
   checklist   OnboardingChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
   completedBy User?               @relation("CompletedBy", fields: [completedById], references: [id])
+  documents   OnboardingDocument[]
 
   @@map("onboarding_items")
+}
+
+model OnboardingDocument {
+  id            String   @id @default(cuid())
+  checklistId   String   @map("checklist_id")
+  itemId        String?  @map("item_id")
+  documentType  String   @map("document_type")
+  fileName      String   @map("file_name")
+  fileKey       String   @map("file_key")
+  fileType      String?  @map("file_type")
+  fileSizeBytes Int?     @map("file_size_bytes")
+  notes         String?  @db.Text
+  uploadedById  String?  @map("uploaded_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  checklist  OnboardingChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  item       OnboardingItem?      @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  uploadedBy User?                @relation("OnboardingDocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([checklistId, documentType])
+  @@map("onboarding_documents")
 }
 
 // ─── Revenue / Placements ─────────────────────────────────────────────────────

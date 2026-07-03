@@ -8,7 +8,12 @@ export async function deleteCandidatesCascade(candidateIds: string[]) {
     where: { id: { in: candidateIds } },
     include: {
       documents: { select: { fileKey: true } },
-      pipelineEntries: { select: { id: true } },
+      pipelineEntries: {
+        select: {
+          id: true,
+          onboarding: { select: { documents: { select: { fileKey: true } } } },
+        },
+      },
     },
   })
   if (!existing.length) return { deletedIds: [], records: [] }
@@ -20,7 +25,7 @@ export async function deleteCandidatesCascade(candidateIds: string[]) {
     if (pipelineEntryIds.length) {
       const checklists = await tx.onboardingChecklist.findMany({
         where: { pipelineEntryId: { in: pipelineEntryIds } },
-        select: { id: true },
+        select: { id: true, documents: { select: { fileKey: true } } },
       })
       await tx.onboardingItem.deleteMany({ where: { checklistId: { in: checklists.map(item => item.id) } } })
       await tx.onboardingChecklist.deleteMany({ where: { pipelineEntryId: { in: pipelineEntryIds } } })
@@ -39,8 +44,14 @@ export async function deleteCandidatesCascade(candidateIds: string[]) {
     await tx.candidate.deleteMany({ where: { id: { in: foundIds } } })
   })
 
-  const fileKeys = existing.flatMap(candidate => candidate.documents.map(document => document.fileKey))
-  await Promise.allSettled(fileKeys.map(key => deleteFile(BUCKETS.RESUMES, key)))
+  const resumeFileKeys = existing.flatMap(candidate => candidate.documents.map(document => document.fileKey))
+  const onboardingFileKeys = existing.flatMap(candidate =>
+    candidate.pipelineEntries.flatMap(entry => entry.onboarding?.documents.map(document => document.fileKey) || []),
+  )
+  await Promise.allSettled([
+    ...resumeFileKeys.map(key => deleteFile(BUCKETS.RESUMES, key)),
+    ...onboardingFileKeys.map(key => deleteFile(BUCKETS.PROFILES, key)),
+  ])
 
   return { deletedIds: foundIds, records: existing }
 }
