@@ -47,6 +47,25 @@ function firstValue(...values: any[]) {
   return null
 }
 
+function numericScore(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.round(number) : null
+}
+
+function storedCandidateAnalysis(parsedData: any, entry: any) {
+  if (parsedData?.aiCandidateAnalysis && typeof parsedData.aiCandidateAnalysis === 'object') {
+    return parsedData.aiCandidateAnalysis
+  }
+  if (!entry?.screeningNotes) return null
+  try {
+    const parsed = JSON.parse(entry.screeningNotes)
+    return parsed?.schemaVersion === 'candidate-analysis-1.0' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 function parseResumeDate(value: any): Date | null {
   const text = renderValue(value)
   if (!text) return null
@@ -317,6 +336,7 @@ function EditField({
 export default function CandidateDetailPage({ params }: { params: { id: string } }) {
   const [activeTab, setActiveTab] = useState('Overview')
   const [downloadingResume, setDownloadingResume] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [screening, setScreening] = useState(false)
   const qc = useQueryClient()
@@ -346,6 +366,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
   const entry = candidate.pipelineEntries?.[0]
   const jd = entry?.jd
   const parsedData = candidate.parsedData || {}
+  const candidateAnalysis = storedCandidateAnalysis(parsedData, entry)
   const standardFields = parsedData.standardFields || {}
   const latestExperience = Array.isArray(parsedData.experience) && parsedData.experience[0] && typeof parsedData.experience[0] === 'object'
     ? parsedData.experience[0]
@@ -365,7 +386,10 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
     : estimateDisplayConfidence(parsedData)
   const missingFields = Array.isArray(extractionMeta.missingFields) ? extractionMeta.missingFields : []
   const redFlags = candidate.redFlags || []
-  const score = entry?.compositeScore ? Math.round(Number(entry.compositeScore)) : null
+  const skillScore = numericScore(entry?.matchScore) ?? numericScore(candidateAnalysis?.skillScore)
+  const availabilityScore = numericScore(entry?.availabilityScore) ?? numericScore(candidateAnalysis?.availabilityScore)
+  const locationScore = numericScore(entry?.locationScore) ?? numericScore(candidateAnalysis?.locationScore)
+  const score = numericScore(entry?.compositeScore) ?? numericScore(candidateAnalysis?.overallScore)
   const rawInferredFields = parsedData.rawInferredFields && typeof parsedData.rawInferredFields === 'object'
     ? parsedData.rawInferredFields
     : {}
@@ -386,6 +410,24 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
       window.alert('Unable to download resume')
     } finally {
       window.setTimeout(() => setDownloadingResume(false), 500)
+    }
+  }
+
+  const handleAnalyzeCandidate = async () => {
+    setAnalyzing(true)
+    try {
+      const response = await fetch(`/api/candidates/${params.id}/analyze`, { method: 'POST' })
+      const data = await response.json()
+      if (!data.success) {
+        toast.error(data.error || 'Unable to analyze candidate')
+        return
+      }
+      toast.success('AI screening pack generated')
+      qc.invalidateQueries({ queryKey: ['candidate', params.id] })
+    } catch {
+      toast.error('Unable to analyze candidate')
+    } finally {
+      setAnalyzing(false)
     }
   }
 
@@ -489,6 +531,14 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
 
           <div className="flex flex-wrap items-center gap-3">
             <button
+              onClick={handleAnalyzeCandidate}
+              disabled={analyzing}
+              className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              Analyze candidate
+            </button>
+            <button
               onClick={() => setShowEdit(true)}
               className="inline-flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold hover:bg-accent"
             >
@@ -569,9 +619,9 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
                     </div>
                   </div>
                   <div className="space-y-3">
-                    <ScoreLine label="Skills match" value={entry?.matchScore ? Math.round(Number(entry.matchScore)) : null} />
-                    <ScoreLine label="Availability fit" value={entry?.availabilityScore ? Math.round(Number(entry.availabilityScore)) : null} />
-                    <ScoreLine label="Location match" value={entry?.locationScore ? Math.round(Number(entry.locationScore)) : null} />
+                    <ScoreLine label="Skills match" value={skillScore} />
+                    <ScoreLine label="Availability fit" value={availabilityScore} />
+                    <ScoreLine label="Location match" value={locationScore} />
                     <ScoreLine label="Overall score" value={score} />
                   </div>
                 </div>
@@ -703,7 +753,124 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
         </div>
       )}
 
-      {activeTab !== 'Overview' && activeTab !== 'Resume' && (
+      {activeTab === 'AI Screening' && (
+        <div className="space-y-5">
+          {candidateAnalysis ? (
+            <>
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-lg font-semibold">Score summary</h2>
+                      <p className="mt-1 text-sm text-slate-500">Generated by AI for HR screening.</p>
+                    </div>
+                    <span className={cn('rounded-xl px-3 py-1 text-sm font-bold', scoreColor(score || 0))}>{score ?? '-'}/100</span>
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    <ScoreLine label="Skills match" value={skillScore} />
+                    <ScoreLine label="Availability fit" value={availabilityScore} />
+                    <ScoreLine label="Location match" value={locationScore} />
+                    <ScoreLine label="Overall score" value={score} />
+                  </div>
+                  {candidateAnalysis.recommendedNextStep && (
+                    <div className="mt-5 rounded-xl bg-violet-50 p-4 text-sm text-violet-800">
+                      <span className="font-semibold">Next step:</span> {candidateAnalysis.recommendedNextStep}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                  <h2 className="text-lg font-semibold">AI Screening Notes</h2>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    {candidateAnalysis.screeningNotes || candidateAnalysis.summary || 'No notes generated yet.'}
+                  </p>
+                  {candidateAnalysis.summary && candidateAnalysis.summary !== candidateAnalysis.screeningNotes && (
+                    <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-600">{candidateAnalysis.summary}</p>
+                  )}
+                  <div className="mt-4 text-xs text-slate-400">
+                    Generated by {candidateAnalysis.provider || 'AI'}{candidateAnalysis.model ? ` / ${candidateAnalysis.model}` : ''}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                  <h2 className="mb-4 text-lg font-semibold">Quick HR screening questions</h2>
+                  {Array.isArray(candidateAnalysis.screeningQuestions) && candidateAnalysis.screeningQuestions.length > 0 ? (
+                    <ol className="space-y-3">
+                      {candidateAnalysis.screeningQuestions.map((question: string, index: number) => (
+                        <li key={`${question}-${index}`} className="flex gap-3 rounded-xl border border-border bg-slate-50/70 p-3 text-sm text-slate-700">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-700">{index + 1}</span>
+                          <span>{question}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-sm text-slate-500">No questions generated yet.</p>
+                  )}
+                </div>
+
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                    <h2 className="mb-4 text-lg font-semibold">Flags</h2>
+                    {redFlags.length > 0 ? (
+                      <div className="space-y-2">
+                        {redFlags.map((flag: any) => (
+                          <div key={flag.id} className="rounded-xl border border-red-100 bg-red-50 p-3 text-sm text-red-700">
+                            <div className="flex items-center gap-2 font-semibold">
+                              <Flag size={15} /> {humanizeKey(flag.flagType || 'Flag')} · {flag.severity}
+                            </div>
+                            <p className="mt-1 leading-6">{flag.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-500">No flags identified by AI.</p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                      <h2 className="mb-3 text-base font-semibold">Strengths</h2>
+                      {Array.isArray(candidateAnalysis.strengths) && candidateAnalysis.strengths.length > 0 ? (
+                        <ul className="space-y-2 text-sm text-slate-600">
+                          {candidateAnalysis.strengths.map((item: string) => <li key={item}>• {item}</li>)}
+                        </ul>
+                      ) : <p className="text-sm text-slate-500">No strengths generated.</p>}
+                    </div>
+                    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+                      <h2 className="mb-3 text-base font-semibold">Risks / Missing info</h2>
+                      {[...(candidateAnalysis.risks || []), ...(candidateAnalysis.missingFields || []).map((field: string) => `Confirm ${humanizeKey(field)}`)].length > 0 ? (
+                        <ul className="space-y-2 text-sm text-slate-600">
+                          {[...(candidateAnalysis.risks || []), ...(candidateAnalysis.missingFields || []).map((field: string) => `Confirm ${humanizeKey(field)}`)].slice(0, 8).map((item: string) => <li key={item}>• {item}</li>)}
+                        </ul>
+                      ) : <p className="text-sm text-slate-500">No risks generated.</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 p-10 text-center shadow-sm">
+              <Sparkles className="mx-auto text-violet-600" size={30} />
+              <h2 className="mt-3 text-lg font-semibold">Generate AI screening pack</h2>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                Analyze the candidate to create score summary, flags, AI screening notes, and 5-10 HR-friendly screening questions.
+              </p>
+              <button
+                onClick={handleAnalyzeCandidate}
+                disabled={analyzing}
+                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+              >
+                {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                Analyze candidate
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab !== 'Overview' && activeTab !== 'Resume' && activeTab !== 'AI Screening' && (
         <div className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-slate-500 shadow-sm">
           {activeTab} details are tracked in the workflow modules.
         </div>

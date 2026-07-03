@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, paginatedOk, getPagination, auditLog, handleError } from '@/lib/api-utils'
 import { z } from 'zod'
+import { sendInterviewScheduledEmails } from '@/lib/email'
 
 const scheduleSchema = z.object({
   pipelineEntryId: z.string(),
@@ -11,6 +12,8 @@ const scheduleSchema = z.object({
   durationMinutes: z.number().min(15).max(240).default(60),
   location: z.string().optional().nullable(),
   videoLink: z.string().optional().nullable(),
+  interviewerName: z.string().min(2),
+  interviewerEmail: z.string().email(),
 })
 
 const feedbackSchema = z.object({
@@ -40,7 +43,7 @@ export async function GET(req: NextRequest) {
         where: { stage: { not: 'REJECTED' } },
         orderBy: { updatedAt: 'desc' },
         include: {
-          candidate: { select: { id: true, fullName: true, currentTitle: true, isInternal: true } },
+          candidate: { select: { id: true, fullName: true, email: true, currentTitle: true, isInternal: true } },
           jd: {
             select: {
               id: true,
@@ -71,7 +74,7 @@ export async function GET(req: NextRequest) {
         include: {
           pipelineEntry: {
             include: {
-              candidate: { select: { id: true, fullName: true, currentTitle: true, isInternal: true } },
+              candidate: { select: { id: true, fullName: true, email: true, currentTitle: true, isInternal: true } },
               jd: { select: { id: true, title: true, client: true } },
             },
           },
@@ -101,13 +104,26 @@ export async function POST(req: NextRequest) {
         ...feedbackSchema.shape,
       }).parse(body)
 
-      const feedback = await prisma.interviewFeedback.create({
-        data: {
-          interviewId,
-          interviewerId: session!.user.id,
-          ...feedbackData,
-          submittedAt: new Date(),
-        },
+      const existing = await prisma.interviewFeedback.findFirst({
+        where: { interviewId, interviewerId: session!.user.id },
+      })
+      const feedback = existing
+        ? await prisma.interviewFeedback.update({
+          where: { id: existing.id },
+          data: { ...feedbackData, submittedAt: new Date() },
+        })
+        : await prisma.interviewFeedback.create({
+          data: {
+            interviewId,
+            interviewerId: session!.user.id,
+            ...feedbackData,
+            submittedAt: new Date(),
+          },
+        })
+
+      await prisma.interview.update({
+        where: { id: interviewId },
+        data: { status: 'COMPLETED' },
       })
       return ok(feedback, 201)
     }
@@ -115,7 +131,13 @@ export async function POST(req: NextRequest) {
     const data = scheduleSchema.parse(body)
     const pipelineEntry = await prisma.pipelineEntry.findUnique({
       where: { id: data.pipelineEntryId },
-      select: { id: true, jdId: true, stage: true },
+      select: {
+        id: true,
+        jdId: true,
+        stage: true,
+        candidate: { select: { fullName: true, email: true } },
+        jd: { select: { title: true, client: true } },
+      },
     })
     if (!pipelineEntry) return err('Pipeline entry not found', 404)
 
@@ -146,11 +168,16 @@ export async function POST(req: NextRequest) {
           durationMinutes: data.durationMinutes,
           location: data.location?.trim() || null,
           videoLink: data.videoLink?.trim() || null,
+          interviewerName: data.interviewerName.trim(),
+          interviewerEmail: data.interviewerEmail.trim().toLowerCase(),
           scheduledById: session!.user.id,
         },
         include: {
           pipelineEntry: {
-            include: { candidate: { select: { fullName: true } } },
+            include: {
+              candidate: { select: { fullName: true, email: true } },
+              jd: { select: { title: true, client: true } },
+            },
           },
           roundTemplate: true,
         },
@@ -175,6 +202,21 @@ export async function POST(req: NextRequest) {
     })
 
     await auditLog(session!.user.id, 'SCHEDULE_INTERVIEW', 'Interview', interview.id, undefined, { roundNumber: data.roundNumber }, req)
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || ''
+    await sendInterviewScheduledEmails({
+      candidateName: pipelineEntry.candidate.fullName,
+      candidateEmail: pipelineEntry.candidate.email,
+      interviewerName: data.interviewerName.trim(),
+      interviewerEmail: data.interviewerEmail.trim().toLowerCase(),
+      jdTitle: pipelineEntry.jd.title,
+      client: pipelineEntry.jd.client,
+      roundLabel: interview.roundTemplate?.roundName || `Round ${data.roundNumber}`,
+      scheduledAt: new Date(data.scheduledAt),
+      durationMinutes: data.durationMinutes,
+      location: data.location?.trim() || null,
+      videoLink: data.videoLink?.trim() || null,
+      assessmentUrl: appUrl ? `${appUrl.replace(/\/$/, '')}/interviews?assessment=${interview.id}` : undefined,
+    })
     return ok(interview, 201)
   } catch (e) { return handleError(e) }
 }
