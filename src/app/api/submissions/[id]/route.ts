@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, auditLog, handleError } from '@/lib/api-utils'
+import { cleanText, ensureOnboardingChecklist, movePipelineStage } from '@/lib/onboarding'
 import { z } from 'zod'
 
 const updateSubmissionSchema = z.object({
@@ -13,16 +14,6 @@ const updateSubmissionSchema = z.object({
 })
 
 const activeSubmissionStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] as const
-
-const onboardingSections = [
-  { category: 'Documents', items: ['Offer letter signed', 'Visa application submitted', 'ID copy received', 'Contract signed'] },
-  { category: 'Access', items: ['Email account created', 'System access granted', 'Badge / access card issued'] },
-  { category: 'Induction', items: ['Orientation scheduled', 'Manager intro done', 'Team intro done'] },
-]
-
-function cleanText(value?: string | null) {
-  return value?.trim() || null
-}
 
 function submissionInclude() {
   return {
@@ -45,23 +36,6 @@ function submissionInclude() {
   }
 }
 
-async function movePipelineStage(tx: any, pipelineEntry: { id: string; stage: string }, toStage: string, userId: string, notes: string) {
-  if (pipelineEntry.stage === toStage) return
-  await tx.pipelineEntry.update({
-    where: { id: pipelineEntry.id },
-    data: { stage: toStage },
-  })
-  await tx.pipelineHistory.create({
-    data: {
-      pipelineEntryId: pipelineEntry.id,
-      fromStage: pipelineEntry.stage,
-      toStage,
-      changedById: userId,
-      notes,
-    },
-  })
-}
-
 function stageForStatus(status: string) {
   if (status === 'APPROVED') return 'CLIENT_APPROVED'
   if (status === 'REJECTED') return 'CLIENT_REJECTED'
@@ -73,22 +47,6 @@ function notesForStatus(status: string) {
   if (status === 'APPROVED') return 'Tahaluf submission approved'
   if (status === 'REJECTED') return 'Tahaluf submission rejected'
   return 'Tahaluf submission marked submitted'
-}
-
-async function createOnboardingItems(tx: any, checklistId: string) {
-  const count = await tx.onboardingItem.count({ where: { checklistId } })
-  if (count) return
-
-  await tx.onboardingItem.createMany({
-    data: onboardingSections.flatMap(section =>
-      section.items.map((itemName, index) => ({
-        checklistId,
-        itemName,
-        category: section.category,
-        sortOrder: index + 1,
-      })),
-    ),
-  })
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -107,7 +65,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'DIR_TECH'])
+    const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'DIR_TECH', 'HR'])
     if (error) return error
 
     const data = updateSubmissionSchema.parse(await req.json())
@@ -121,21 +79,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (existing.status !== 'APPROVED') return err('Only approved submissions can start onboarding', 400)
 
       const result = await prisma.$transaction(async (tx) => {
-        const checklist = await tx.onboardingChecklist.upsert({
-          where: { pipelineEntryId: existing.pipelineEntryId },
-          update: {
-            startDate: new Date(),
-            managedById: session!.user.id,
-            isComplete: false,
-          },
-          create: {
-            pipelineEntryId: existing.pipelineEntryId,
-            startDate: new Date(),
-            managedById: session!.user.id,
-            isComplete: false,
-          },
-        })
-        await createOnboardingItems(tx, checklist.id)
+        const checklist = await ensureOnboardingChecklist(tx, existing.pipelineEntryId, session!.user.id, new Date())
         await movePipelineStage(tx, existing.pipelineEntry, 'ONBOARDING', session!.user.id, 'Onboarding started from Tahaluf approval')
         return checklist
       })
@@ -167,6 +111,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
       if (statusChanged && data.status) {
         await movePipelineStage(tx, existing.pipelineEntry, stageForStatus(data.status), session!.user.id, notesForStatus(data.status))
+        if (data.status === 'APPROVED') {
+          await ensureOnboardingChecklist(tx, existing.pipelineEntryId, session!.user.id)
+        }
       }
 
       return updated
@@ -179,7 +126,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'DIR_TECH'])
+    const { error, session } = await requireAuth(['SUPER_ADMIN', 'CSO', 'DIR_TECH', 'HR'])
     if (error) return error
 
     const existing = await prisma.clientSubmission.findUnique({

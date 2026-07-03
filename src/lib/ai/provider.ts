@@ -1,4 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { auth } from '@/lib/auth/config'
+import { prisma } from '@/lib/db'
+import { logger } from '@/lib/logger'
 
 export type AIProvider = 'anthropic' | 'gemini' | 'ollama'
 
@@ -17,6 +20,7 @@ export interface GenerateAITextResult {
   text: string
   provider: AIProvider
   model: string
+  usage?: AIUsageDetails
 }
 
 function resolveProvider(): AIProvider {
@@ -40,7 +44,13 @@ function resolveModel(provider: AIProvider) {
   return provider === 'gemini' ? model.replace(/^models\//, '') : model
 }
 
-async function generateWithAnthropic(options: GenerateAITextOptions, model: string): Promise<string> {
+interface ProviderTextResult {
+  text: string
+  model: string
+  usage?: AIUsageDetails
+}
+
+async function generateWithAnthropic(options: GenerateAITextOptions, model: string): Promise<ProviderTextResult> {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured')
 
   const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
@@ -51,10 +61,23 @@ async function generateWithAnthropic(options: GenerateAITextOptions, model: stri
     messages: [{ role: 'user', content: options.prompt }],
   })
 
-  return response.content
+  const text = response.content
     .filter(part => part.type === 'text')
     .map(part => part.type === 'text' ? part.text : '')
     .join('\n')
+
+  return {
+    text,
+    model,
+    usage: {
+      promptTokens: response.usage.input_tokens,
+      completionTokens: response.usage.output_tokens,
+      totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+      metadata: {
+        stopReason: response.stop_reason,
+      },
+    },
+  }
 }
 
 function sleep(ms: number) {
@@ -106,10 +129,29 @@ async function callGemini(baseUrl: string, apiKey: string, candidateModel: strin
   const parts = data?.candidates?.[0]?.content?.parts || []
   const text = parts.map((part: any) => part.text).filter(Boolean).join('\n')
   if (!text) return { ok: false as const, status: 200, errorText: 'no text in response', message: 'Gemini API returned no text' }
-  return { ok: true as const, text }
+  const usageMetadata = data?.usageMetadata || {}
+
+  return {
+    ok: true as const,
+    text,
+    model: candidateModel,
+    usage: {
+      promptTokens: Number(usageMetadata.promptTokenCount || 0),
+      completionTokens: Number(usageMetadata.candidatesTokenCount || 0),
+      totalTokens: Number(usageMetadata.totalTokenCount || 0),
+      cachedTokens: usageMetadata.cachedContentTokenCount == null
+        ? undefined
+        : Number(usageMetadata.cachedContentTokenCount),
+      metadata: {
+        thoughtsTokenCount: usageMetadata.thoughtsTokenCount,
+        promptTokensDetails: usageMetadata.promptTokensDetails,
+        candidatesTokensDetails: usageMetadata.candidatesTokensDetails,
+      },
+    },
+  }
 }
 
-async function generateWithGemini(options: GenerateAITextOptions, model: string): Promise<string> {
+async function generateWithGemini(options: GenerateAITextOptions, model: string): Promise<ProviderTextResult> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
   if (!apiKey) throw new Error('GEMINI_API_KEY or GOOGLE_API_KEY is not configured')
 
@@ -125,7 +167,7 @@ async function generateWithGemini(options: GenerateAITextOptions, model: string)
     // have its own (possibly zero) quota.
     for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
       const result = await callGemini(baseUrl, apiKey, candidateModel, options)
-      if (result.ok) return result.text
+      if (result.ok) return { text: result.text, model: result.model, usage: result.usage }
 
       lastError = new Error(result.message)
 
@@ -237,6 +279,7 @@ async function generateWithOllama(options: GenerateAITextOptions, model: string)
 }
 
 export async function generateAIText(options: GenerateAITextOptions): Promise<GenerateAITextResult> {
+  const startedAt = Date.now()
   const provider = resolveProvider()
   const model = resolveModel(provider)
   const text = provider === 'ollama'
@@ -245,5 +288,7 @@ export async function generateAIText(options: GenerateAITextOptions): Promise<Ge
       ? await generateWithGemini(options, model)
       : await generateWithAnthropic(options, model)
 
-  return { text, provider, model }
+  await recordAIUsage(provider, result, options, Date.now() - startedAt)
+
+  return { text: result.text, provider, model: result.model, usage: result.usage }
 }
