@@ -2,7 +2,7 @@
 const nextConfig = {
   output: 'standalone',
   experimental: {
-    serverComponentsExternalPackages: ['@prisma/client', 'prisma', 'bcryptjs', 'pdf-parse', 'mammoth', 'pdfkit', 'winston'],
+    serverComponentsExternalPackages: ['@prisma/client', 'prisma', 'bcryptjs', 'pdfjs-dist', 'mammoth', 'pdfkit', 'winston'],
   },
   images: {
     remotePatterns: [

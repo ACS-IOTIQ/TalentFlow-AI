@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-export type AIProvider = 'anthropic' | 'gemini'
+export type AIProvider = 'anthropic' | 'gemini' | 'ollama'
 
 export interface GenerateAITextOptions {
   system?: string
@@ -21,13 +21,18 @@ export interface GenerateAITextResult {
 
 function resolveProvider(): AIProvider {
   const configured = process.env.AI_PROVIDER?.toLowerCase()
+  if (configured === 'ollama') return 'ollama'
   if (configured === 'gemini') return 'gemini'
   if (configured === 'anthropic' || configured === 'claude') return 'anthropic'
+  // Local Ollama is the default — no API key, no quota, no cost.
   if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) return 'gemini'
-  return 'anthropic'
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  return 'ollama'
 }
 
 function resolveModel(provider: AIProvider) {
+  if (provider === 'ollama') return process.env.AI_MODEL || process.env.OLLAMA_MODEL || 'qwen2.5:3b-instruct'
+
   const model = process.env.AI_MODEL || (provider === 'gemini'
     ? process.env.GEMINI_MODEL || 'gemini-2.5-flash'
     : process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6')
@@ -143,12 +148,102 @@ async function generateWithGemini(options: GenerateAITextOptions, model: string)
   throw new Error('Gemini API request failed')
 }
 
+const OLLAMA_WARMUP_RETRY_DELAYS_MS = [3000, 6000, 12000]
+
+async function callOllama(baseUrl: string, model: string, options: GenerateAITextOptions) {
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS) || 600_000
+  const numCtx = Number(process.env.OLLAMA_NUM_CTX) || 8192
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: [
+          ...(options.system ? [{ role: 'system', content: options.system }] : []),
+          { role: 'user', content: options.prompt },
+        ],
+        ...(options.json && { format: 'json' }),
+        options: {
+          num_predict: options.maxTokens || 2000,
+          num_ctx: numCtx,
+          temperature: 0.2,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      const notPulled = response.status === 404 && /not found|try pulling/i.test(errorText)
+      return { ok: false as const, notPulled, connRefused: false, timedOut: false, message: `Ollama API error ${response.status}: ${errorText}` }
+    }
+
+    const data = await response.json()
+    const text = data?.message?.content
+    if (!text) return { ok: false as const, notPulled: false, connRefused: false, timedOut: false, message: 'Ollama API returned no text' }
+    return { ok: true as const, text }
+  } catch (error) {
+    const isAbort = error instanceof Error && error.name === 'AbortError'
+    const isConnRefused = error instanceof Error && /ECONNREFUSED|fetch failed/i.test(error.message)
+    return {
+      ok: false as const,
+      notPulled: false,
+      connRefused: isConnRefused,
+      timedOut: isAbort,
+      message: isAbort
+        ? `Ollama request timed out after ${timeoutMs}ms (model may still be loading, or this prompt is slow on CPU)`
+        : `Ollama connection error: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function generateWithOllama(options: GenerateAITextOptions, model: string): Promise<string> {
+  if (options.inlineData) {
+    // Local text-only models can't accept Gemini-style inline binary (PDF/DOCX) input.
+    // Callers already fall back to a non-AI extraction path on any AI failure here.
+    throw new Error('OLLAMA_NO_MULTIMODAL: local Ollama models do not support inline document input')
+  }
+
+  const baseUrl = (process.env.OLLAMA_BASE_URL || 'http://ollama:11434').replace(/\/$/, '')
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= OLLAMA_WARMUP_RETRY_DELAYS_MS.length; attempt++) {
+    const result = await callOllama(baseUrl, model, options)
+    if (result.ok) return result.text
+
+    if (result.notPulled) {
+      throw new Error(`Ollama model "${model}" is not pulled yet. Wait for the ollama-setup service to finish, or run 'ollama pull ${model}'.`)
+    }
+
+    if (result.connRefused && attempt < OLLAMA_WARMUP_RETRY_DELAYS_MS.length) {
+      // The Ollama container may still be starting up — retry with backoff.
+      lastError = new Error(result.message)
+      await sleep(OLLAMA_WARMUP_RETRY_DELAYS_MS[attempt])
+      continue
+    }
+
+    // Timeouts and other errors are not retried — retrying an already-slow call just doubles the wait.
+    throw new Error(result.message)
+  }
+
+  throw lastError || new Error('Ollama API request failed')
+}
+
 export async function generateAIText(options: GenerateAITextOptions): Promise<GenerateAITextResult> {
   const provider = resolveProvider()
   const model = resolveModel(provider)
-  const text = provider === 'gemini'
-    ? await generateWithGemini(options, model)
-    : await generateWithAnthropic(options, model)
+  const text = provider === 'ollama'
+    ? await generateWithOllama(options, model)
+    : provider === 'gemini'
+      ? await generateWithGemini(options, model)
+      : await generateWithAnthropic(options, model)
 
   return { text, provider, model }
 }

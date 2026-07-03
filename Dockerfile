@@ -29,6 +29,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modul
 # Copy prisma and tsx CLIs so the entrypoint doesn't need to download them via npx
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/tsx ./node_modules/tsx
+# Next's standalone file tracing misses pdf.worker.mjs (loaded dynamically, not statically imported)
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/pdfjs-dist ./node_modules/pdfjs-dist
 # Create symlinks so __dirname resolves to the package dir (where the wasm lives)
 RUN mkdir -p node_modules/.bin && \
     ln -sf ../prisma/build/index.js node_modules/.bin/prisma && \

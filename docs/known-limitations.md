@@ -4,9 +4,11 @@
 
 | Feature | Limitation | Workaround |
 |---------|-----------|------------|
-| AI JD Polish | Requires configured `AI_PROVIDER` credentials | Set either `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` in `.env`; without credentials the feature returns an error |
-| AI Screening | Requires configured `AI_PROVIDER` credentials | Without credentials, manual screening notes can be added directly to pipeline entries |
-| AI Resume Extraction | Requires configured `AI_PROVIDER` credentials for parsing | Upload still creates a fallback candidate record when AI extraction is unavailable |
+| AI provider | Runs locally via Ollama by default (`AI_PROVIDER=ollama`, no API key/cost/rate limit) — Anthropic/Gemini remain available as an opt-in switch by setting `AI_PROVIDER` and the matching key | First boot pulls the model (a few minutes, one-time); the `app` container won't accept AI requests until `ollama-setup` finishes — see `docker-compose.yml` |
+| Local AI hardware | The default model (`qwen2.5:1.5b-instruct`) is tuned for speed on modest CPUs; CPU inference is still categorically slower than a cloud API — observed real-world generation speed as low as ~5 tokens/sec on constrained hosts, meaning a full resume extraction can take several minutes (vs 1–5s for a cloud API); `OLLAMA_TIMEOUT_MS` defaults to 10 minutes to accommodate this | For better JSON-extraction reliability at the cost of speed, set `OLLAMA_MODEL=qwen2.5:3b-instruct` or `qwen2.5:7b-instruct` (needs progressively more RAM/CPU) — pure env-var change, no code change |
+| Local AI + scanned documents | Ollama's local text models can't read inline PDF/DOCX bytes the way Gemini's multimodal API could — only affects resumes/JDs where local text extraction itself already failed (e.g. scanned/image-based files) | Falls back to a basic (non-AI) record automatically; fill in missing fields manually |
+| AI Screening | "Run AI deep screening" only re-scores new/un-scored candidates by default | Check "Force full re-screen" to re-score everyone (e.g. after changing weights) |
+| Internal Resources analyze | "Analyze" reuses a candidate's cached AI assessment for the same JD instead of re-calling AI every click | Check "Force full re-analyze" to bypass the cache and get fresh scores |
 | Email notifications | Requires SMTP credentials | In-app notifications work without SMTP |
 | MS Teams SSO | Requires Azure App Registration | Email + Employee ID login works without Teams config |
 

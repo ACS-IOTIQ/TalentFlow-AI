@@ -226,7 +226,10 @@ export async function POST(req: NextRequest) {
               : await extractResumeProfileFromDocument(f.buffer, f.mimeType || 'application/pdf', jdContext, f.filename)
             results.aiParsed++
           } catch (e) {
-            extractionError = e instanceof Error ? e.message : 'AI extraction failed'
+            const rawMessage = e instanceof Error ? e.message : 'AI extraction failed'
+            extractionError = rawMessage.startsWith('OLLAMA_NO_MULTIMODAL')
+              ? 'AI could not read this file directly (scanned/image-based document); using basic extraction'
+              : rawMessage
             results.extractionErrors.push({ fileName: f.filename, error: extractionError })
             results.fallbackCreated++
           }

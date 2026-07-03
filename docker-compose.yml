@@ -72,6 +72,47 @@ services:
       echo 'MinIO buckets ready';
       "
 
+  # ─── Ollama (local AI inference) ──────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: acs_ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "127.0.0.1:11435:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    # Uncomment on a host with an NVIDIA GPU + nvidia-container-toolkit installed — no other change needed:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ─── Ollama Setup (pre-pull the model, one-shot) ─────────────────────────────
+  ollama-setup:
+    image: ollama/ollama:latest
+    container_name: acs_ollama_setup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: >
+      /bin/sh -c "
+      ollama pull ${OLLAMA_MODEL:-qwen2.5:1.5b-instruct};
+      echo 'Ollama model ready';
+      "
+
   # ─── Next.js Application ─────────────────────────────────────────────────────
   app:
     build:
@@ -88,6 +129,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      ollama-setup:
+        condition: service_completed_successfully
     environment:
       # Database
       DATABASE_URL: postgresql://${POSTGRES_USER:-talentflow}:${POSTGRES_PASSWORD:-talentflow_secure_pass}@postgres:5432/${POSTGRES_DB:-talentflow}
@@ -106,9 +149,14 @@ services:
       MINIO_BUCKET_JDS: talentflow-jds
       MINIO_BUCKET_PROFILES: talentflow-profiles
       MINIO_BUCKET_AVATARS: talentflow-avatars
-      # AI
-      AI_PROVIDER: ${AI_PROVIDER:-gemini}
+      # AI — local Ollama by default (no API key, no cost, no rate limits)
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
       AI_MODEL: ${AI_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b-instruct}
+      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-600000}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-8192}
+      # Optional — only used if AI_PROVIDER is switched away from "ollama"
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -135,4 +183,5 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  ollama_data:
   app_logs:

@@ -176,7 +176,7 @@ async function repairResumeExtractionJson(
   sourceFileName: string | undefined,
 ) {
   const result = await generateAIText({
-    maxTokens: 6000,
+    maxTokens: 2500,
     json: true,
     system: 'Convert resume extraction output into valid JSON only. Never include markdown, comments, trailing commas, or commentary.',
     prompt: `Return one valid JSON object matching this schema. Use short values and arrays. Use the resume text when available to fill missing values, and use null/empty arrays when unknown. Infer currentTitle/currentCompany from the most recent role. Compute totalExperienceYears from dated work history when explicit total experience is missing.
@@ -200,7 +200,7 @@ async function minimalResumeExtractionJson(
   sourceFileName: string | undefined,
 ) {
   return generateAIText({
-    maxTokens: 3500,
+    maxTokens: 2000,
     json: true,
     system: 'Extract a compact resume profile as valid JSON only. No markdown. No long paragraphs. No trailing commas.',
     prompt: `The previous resume extraction JSON was invalid. Create a smaller valid JSON object now.
@@ -483,7 +483,7 @@ export async function extractResumeProfile(
     : 'JD: none'
 
   const result = await generateAIText({
-    maxTokens: 6000,
+    maxTokens: 3000,
     json: true,
     system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts. Keep arrays concise.',
     prompt: `Task: extract a complete hiring profile from the resume.
@@ -529,7 +529,7 @@ export async function extractResumeProfileFromDocument(
     : 'JD: none'
 
   const result = await generateAIText({
-    maxTokens: 6000,
+    maxTokens: 3000,
     json: true,
     system: 'Expert resume parser. Output only valid JSON matching the requested schema. Use null for unknowns; never invent facts. Keep arrays concise.',
     prompt: `Task: extract a complete hiring profile from the attached resume document.

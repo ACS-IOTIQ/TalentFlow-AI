@@ -312,7 +312,8 @@ function fitBadgeClass(fitScore: number) {
 function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (seed: any) => void }) {
   const [jdId, setJdId] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
-  const [result, setResult] = useState<{ jd: any; results: any[]; analyzed: number; errors: number } | null>(null)
+  const [forceReanalyze, setForceReanalyze] = useState(false)
+  const [result, setResult] = useState<{ jd: any; results: any[]; analyzed: number; skippedCached: number; errors: number } | null>(null)
 
   const { data: jdsData } = useQuery({
     queryKey: ['jds-active'],
@@ -334,7 +335,7 @@ function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (s
       const response = await fetch('/api/internal-resources?action=analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jdId }),
+        body: JSON.stringify({ jdId, force: forceReanalyze }),
       })
       const data = await response.json()
       if (data.success) {
@@ -410,6 +411,16 @@ function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (s
             </button>
           </div>
 
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={forceReanalyze}
+              onChange={event => setForceReanalyze(event.target.checked)}
+              className="rounded"
+            />
+            Force full re-analyze (ignore cached assessments for this JD)
+          </label>
+
           {analyzing && (
             <div className="rounded-xl border border-border bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
               Screening every internal resource against this JD...
@@ -420,6 +431,7 @@ function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (s
             <div className="space-y-3">
               <div className="text-sm text-slate-500">
                 {result.analyzed} resource{result.analyzed === 1 ? '' : 's'} analyzed against <span className="font-semibold text-slate-700">{result.jd.title}</span>
+                {result.skippedCached > 0 && `, ${result.skippedCached} from cache`}
                 {result.errors > 0 && ` - ${result.errors} could not be scored`}
               </div>
               {result.results.map((candidate: any, index: number) => (
@@ -435,6 +447,11 @@ function AnalyzeModal({ onClose, onDivert }: { onClose: () => void; onDivert: (s
                         <span className="rounded-md bg-violet-100 px-2 py-1 text-[10px] font-bold uppercase text-violet-700">
                           {candidate.recommendedDiversionType} - {candidate.recommendedAllocationPercent}%
                         </span>
+                        {candidate.fromCache && (
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">
+                            Cached
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1 text-sm font-medium text-slate-600">
                         {candidate.currentTitle || 'ACS Resource'} - EMP {candidate.employeeIdRef || '-'}

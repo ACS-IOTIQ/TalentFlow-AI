@@ -4,7 +4,7 @@
 
 2. **Currency is AED** — All salary and billing fields default to UAE Dirhams (AED). This is configurable per placement.
 
-3. **AI features require configured provider credentials** — Set `AI_PROVIDER` to `anthropic` or `gemini` and provide the matching API key. Resume upload falls back to a basic candidate record if AI extraction fails; JD polishing and AI screening return errors without valid credentials.
+3. **AI runs locally by default, no API key needed** — `AI_PROVIDER=ollama` (the default) runs inference inside the Docker Compose stack itself via an `ollama` service, with zero external API cost or rate limits. Resume upload falls back to a basic candidate record if AI extraction fails. To use a cloud provider instead, set `AI_PROVIDER` to `anthropic` or `gemini` and provide the matching API key.
 
 4. **Password reset is stubbed** — The forgot-password page shows a success message without sending an email (SMTP config is optional). In production, configure SMTP credentials in `.env`.
 

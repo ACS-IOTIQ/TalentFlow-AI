@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
       const body = await req.json()
       const { jdId, force, candidateId } = z.object({
         jdId: z.string(),
-        force: z.boolean().default(true),
+        force: z.boolean().default(false),
         candidateId: z.string().optional(),
       }).parse(body)
 

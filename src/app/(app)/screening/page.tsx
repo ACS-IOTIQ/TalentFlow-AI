@@ -51,6 +51,7 @@ function score(entry: any) {
 export default function ScreeningPage() {
   const [selectedJd, setSelectedJd] = useState('')
   const [running, setRunning] = useState(false)
+  const [forceRescreen, setForceRescreen] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
   const [selectedEntries, setSelectedEntries] = useState<Record<string, boolean>>({})
   const [search, setSearch] = useState('')
@@ -138,11 +139,12 @@ export default function ScreeningPage() {
       const response = await fetch('/api/screening?action=run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jdId: selectedJd, force: true }),
+        body: JSON.stringify({ jdId: selectedJd, force: forceRescreen }),
       })
       const data = await response.json()
       if (data.success) {
-        toast.success(`AI screened ${data.data.screened}/${data.data.total} linked candidate(s)`)
+        const scope = forceRescreen ? 'candidate(s)' : 'new/un-scored candidate(s)'
+        toast.success(`AI screened ${data.data.screened}/${data.data.total} ${scope}`)
         setSelectedEntries({})
         qc.invalidateQueries({ queryKey: ['screening-results', selectedJd] })
       } else {
@@ -195,6 +197,15 @@ export default function ScreeningPage() {
           <p className="mt-2 text-base text-slate-500">Deep AI research, ranking, justification, and recruiter finalization</p>
         </div>
         <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={forceRescreen}
+              onChange={event => setForceRescreen(event.target.checked)}
+              className="rounded"
+            />
+            Force full re-screen
+          </label>
           <button
             onClick={runScreening}
             disabled={running || !selectedJd}

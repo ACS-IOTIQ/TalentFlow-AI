@@ -166,7 +166,8 @@ ${analysisSchema}
 
 Rules:
 - Preserve usable facts from the invalid output.
-- If a field is unknown, use 0, "", [], or null as appropriate.
+- Array fields (screeningQuestions, strengths, risks, missingFields) must contain PLAIN STRINGS only, never objects.
+- Fill in scores and summary/screeningNotes with a genuine best-effort assessment from the candidate profile below — do not leave everything at 0/empty; that is what caused this repair to be needed.
 - Generate 5-10 non-technical HR screening questions.
 - Do not invent candidate facts.
 
@@ -186,10 +187,31 @@ function score(value: unknown, fallback = 0) {
   return Math.max(0, Math.min(100, Math.round(number)))
 }
 
+function stringFromItem(item: unknown): string {
+  if (typeof item === 'string') return item.trim()
+  if (item && typeof item === 'object') {
+    const record = item as Record<string, unknown>
+    const named = record.question || record.text || record.title || record.description || record.value || record.name
+    if (typeof named === 'string') return named.trim()
+    const stringValues = Object.values(record).filter((value): value is string => typeof value === 'string')
+    if (stringValues.length) return stringValues.join(' - ').trim()
+    return ''
+  }
+  return item === null || item === undefined ? '' : String(item).trim()
+}
+
 function stringArray(value: unknown, limit = 10) {
   return Array.isArray(value)
-    ? value.map(item => String(item).trim()).filter(Boolean).slice(0, limit)
+    ? value.map(stringFromItem).filter(Boolean).slice(0, limit)
     : []
+}
+
+function isDegenerateAnalysis(parsed: any) {
+  const scoresAllZero = [parsed?.overallScore, parsed?.skillScore, parsed?.availabilityScore, parsed?.locationScore]
+    .every(value => Number(value) === 0)
+  const textEmpty = !String(parsed?.summary || '').trim() && !String(parsed?.screeningNotes || '').trim()
+  const noStrengths = !Array.isArray(parsed?.strengths) || parsed.strengths.length === 0
+  return scoresAllZero && textEmpty && noStrengths
 }
 
 function normalizeFlags(value: unknown): CandidateAnalysisFlag[] {
@@ -221,6 +243,11 @@ Analyze this candidate profile for a recruiter screening call. Use only the supp
 Return strict JSON only with:
 ${analysisSchema}
 
+Type rules (important — a small mistake here breaks the app):
+- "screeningQuestions", "strengths", "risks", "missingFields" must each be a JSON array of PLAIN STRINGS, e.g. ["question one?", "question two?"]. Never an array of objects.
+- Scores (overallScore, skillScore, availabilityScore, locationScore) must be your genuine best-effort estimate 0-100 based on the profile — do not leave them at 0 unless the profile is truly empty.
+- "summary" and "screeningNotes" must be non-empty, real sentences describing this specific candidate — never leave them blank.
+
 Question rules:
 - Generate 5-10 questions useful for HR in a first screening call.
 - Questions must be non-technical.
@@ -236,6 +263,7 @@ ${jdContext ? `Job description context:\n${jdContext}` : 'No JD is linked. Score
   let parsed: any
   try {
     parsed = parseJson(response.text)
+    if (isDegenerateAnalysis(parsed)) throw new Error('AI candidate analysis returned invalid JSON (empty/degenerate response)')
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('invalid JSON')) throw error
     try {
@@ -245,6 +273,7 @@ ${jdContext ? `Job description context:\n${jdContext}` : 'No JD is linked. Score
         jdContext,
       })
       parsed = parseJson(response.text)
+      if (isDegenerateAnalysis(parsed)) throw new Error('AI candidate analysis returned invalid JSON (degenerate repair response)')
     } catch (repairError) {
       if (!(repairError instanceof Error) || !repairError.message.includes('invalid JSON')) throw repairError
       return fallbackCandidateAnalysis({

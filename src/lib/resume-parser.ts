@@ -1,12 +1,34 @@
-import pdfParse from 'pdf-parse'
 import mammoth from 'mammoth'
 import unzipper from 'unzipper'
 import { Readable } from 'stream'
 
+// pdfjs-dist's legacy Node build is ESM-only; import dynamically to avoid
+// bundler/CJS interop issues in Next.js's server build.
+async function loadPdfJs() {
+  return import('pdfjs-dist/legacy/build/pdf.mjs')
+}
+
 export async function extractTextFromPDF(buffer: Buffer): Promise<string> {
   try {
-    const data = await pdfParse(buffer)
-    return data.text.trim()
+    const pdfjsLib = await loadPdfJs()
+
+    // No standardFontDataUrl: that's only used for glyph-metric fallback during
+    // rendering. We only read text content, so its absence is a harmless warning.
+    const doc = await pdfjsLib.getDocument({
+      data: new Uint8Array(buffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      disableFontFace: true,
+    }).promise
+
+    const pageTexts: string[] = []
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber)
+      const content = await page.getTextContent()
+      pageTexts.push(content.items.map((item: any) => item.str || '').join(' '))
+    }
+
+    return pageTexts.join('\n').replace(/[ \t]+/g, ' ').trim()
   } catch {
     return ''
   }

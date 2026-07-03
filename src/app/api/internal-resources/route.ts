@@ -33,6 +33,7 @@ const assessSchema = resourceSchema.partial().extend({
 
 const analyzeSchema = z.object({
   jdId: z.string().min(1),
+  force: z.boolean().default(false),
 })
 
 function cleanEmail(email?: string) {
@@ -105,7 +106,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'analyze') {
-      const { jdId } = analyzeSchema.parse(await req.json())
+      const { jdId, force } = analyzeSchema.parse(await req.json())
       const jd = await prisma.jobDescription.findUnique({
         where: { id: jdId },
         select: { id: true, title: true, client: true, rawContent: true, polishedContent: true, finalContent: true, requiredSkills: true },
@@ -120,16 +121,38 @@ export async function POST(req: NextRequest) {
 
       const jdMeta = { id: jd.id, title: jd.title, client: jd.client }
       if (!candidates.length) {
-        return ok({ jd: jdMeta, results: [], analyzed: 0, errors: 0 })
+        return ok({ jd: jdMeta, results: [], analyzed: 0, skippedCached: 0, errors: 0 })
       }
 
       const jdContent = jd.finalContent || jd.polishedContent || jd.rawContent || ''
       const results: any[] = []
+      let analyzed = 0
+      let skippedCached = 0
       let errors = 0
 
       for (const candidate of candidates) {
-        const diversion = (candidate.parsedData as any)?.diversion || {}
+        const parsedData = (candidate.parsedData as any) && typeof candidate.parsedData === 'object' ? candidate.parsedData as any : {}
+        const diversion = parsedData.diversion || {}
         const skillsText = candidate.skills.map(skill => skill.skillName).filter(Boolean).join(', ') || diversion.skills || ''
+        const cached = diversion.assessmentsByJd?.[jdId]
+
+        if (cached && !force) {
+          skippedCached++
+          results.push({
+            candidateId: candidate.id,
+            employeeIdRef: candidate.employeeIdRef,
+            fullName: candidate.fullName,
+            currentTitle: candidate.currentTitle,
+            email: candidate.email,
+            skills: skillsText,
+            acsMonthlyCost: Number(candidate.acsMonthlyCost || diversion.acsMonthlyCost || 0),
+            billingRate: Number(diversion.billingRate || 0),
+            fromCache: true,
+            assessedAt: cached.assessedAt,
+            ...cached.assessment,
+          })
+          continue
+        }
 
         try {
           const assessment = await assessInternalResource({
@@ -147,6 +170,23 @@ export async function POST(req: NextRequest) {
             jdSkills: jd.requiredSkills,
           })
 
+          await prisma.candidate.update({
+            where: { id: candidate.id },
+            data: {
+              parsedData: {
+                ...parsedData,
+                diversion: {
+                  ...diversion,
+                  assessmentsByJd: {
+                    ...(diversion.assessmentsByJd || {}),
+                    [jdId]: { assessment, assessedAt: new Date().toISOString() },
+                  },
+                },
+              },
+            },
+          })
+
+          analyzed++
           results.push({
             candidateId: candidate.id,
             employeeIdRef: candidate.employeeIdRef,
@@ -156,6 +196,7 @@ export async function POST(req: NextRequest) {
             skills: skillsText,
             acsMonthlyCost: Number(candidate.acsMonthlyCost || diversion.acsMonthlyCost || 0),
             billingRate: Number(diversion.billingRate || 0),
+            fromCache: false,
             ...assessment,
           })
         } catch {
@@ -165,8 +206,8 @@ export async function POST(req: NextRequest) {
 
       results.sort((a, b) => b.fitScore - a.fitScore)
 
-      await auditLog(session!.user.id, 'ANALYZE_INTERNAL_RESOURCES', 'JobDescription', jdId, undefined, { analyzed: results.length, errors }, req)
-      return ok({ jd: jdMeta, results, analyzed: results.length, errors })
+      await auditLog(session!.user.id, 'ANALYZE_INTERNAL_RESOURCES', 'JobDescription', jdId, undefined, { analyzed, skippedCached, errors }, req)
+      return ok({ jd: jdMeta, results, analyzed, skippedCached, errors })
     }
 
     const data = resourceSchema.parse(await req.json())

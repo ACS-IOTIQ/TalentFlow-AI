@@ -32,9 +32,19 @@ export async function POST(req: NextRequest) {
 
     const buffer = Buffer.from(await file.arrayBuffer())
     const rawText = await extractTextFromFile(buffer, file.name)
-    const extracted = rawText.trim()
-      ? await extractJobDescriptionFields(rawText, file.name)
-      : await extractJobDescriptionFieldsFromDocument(buffer, inferMimeType(file), file.name)
+
+    let extracted
+    try {
+      extracted = rawText.trim()
+        ? await extractJobDescriptionFields(rawText, file.name)
+        : await extractJobDescriptionFieldsFromDocument(buffer, inferMimeType(file), file.name)
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('OLLAMA_NO_MULTIMODAL')) {
+        return err('AI could not read this file directly (scanned/image-based document). Please fill in the JD fields manually.', 422)
+      }
+      throw e
+    }
+
     if (!extracted.rawContent.trim()) return err('Could not extract readable text from this JD document', 422)
 
     return ok({ ...extracted, rawFileName: file.name })
