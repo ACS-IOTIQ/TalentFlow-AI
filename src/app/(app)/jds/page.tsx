@@ -44,6 +44,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Remote', 'Hybrid']
+const AI_ENABLED = process.env.NEXT_PUBLIC_AI_FEATURES_ENABLED !== 'false'
 
 // ─── Shared: Confirm Dialog ───────────────────────────────────────────────────
 
@@ -275,7 +276,7 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
           <div>
             <h2 className="font-semibold">New job description</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Create manually or upload an existing JD for AI extraction</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Create manually or upload an existing JD for field extraction</p>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-accent rounded-lg"><X size={16} /></button>
         </div>
@@ -305,7 +306,7 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
               <label className="flex flex-col items-center justify-center gap-2 cursor-pointer text-center">
                 {extracting ? <Loader2 size={24} className="animate-spin text-brand-600" /> : <Upload size={24} className="text-brand-600" />}
                 <span className="text-sm font-medium">{rawFileName || 'Upload PDF, DOC, or DOCX'}</span>
-                <span className="text-xs text-muted-foreground">AI extracts the JD into editable fields before polishing</span>
+                <span className="text-xs text-muted-foreground">Extract the JD into editable fields before saving</span>
                 <input
                   type="file"
                   accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -401,7 +402,7 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
 
           {polishedContent && (
             <div>
-              <label className="block text-sm font-medium mb-1.5">AI polished preview</label>
+              <label className="block text-sm font-medium mb-1.5">Polished preview</label>
               <textarea
                 value={polishedContent}
                 onChange={e => setPolishedContent(e.target.value)}
@@ -422,18 +423,20 @@ function NewJDModal({ onClose }: { onClose: () => void }) {
             type="submit"
             form="new-jd-form"
             disabled={saving || polishing || extracting}
-            className="flex items-center gap-2 px-4 py-2 text-sm border border-border rounded-lg hover:bg-accent disabled:opacity-60">
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            Save draft
-          </button>
-          <button
-            type="button"
-            onClick={handlePolishAndSave}
-            disabled={saving || polishing || extracting}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-60">
-            {polishing || saving ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-            Polish with AI & save
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            Save JD
           </button>
+          {AI_ENABLED && (
+            <button
+              type="button"
+              onClick={handlePolishAndSave}
+              disabled={saving || polishing || extracting}
+              className="flex items-center gap-2 px-4 py-2 text-sm border border-border rounded-lg hover:bg-accent disabled:opacity-60">
+              {polishing || saving ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+              Polish with AI & save
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -619,6 +622,7 @@ export default function JDsPage() {
   const { data: session } = useSession()
   const role = (session?.user as any)?.role as string | undefined
   const canEdit = role && ['SUPER_ADMIN', 'CSO', 'DIR_TECH'].includes(role)
+  const canCreate = role && ['SUPER_ADMIN', 'CSO', 'DIR_TECH', 'HR'].includes(role)
   const canClose = role && ['SUPER_ADMIN', 'CSO'].includes(role)
   const canHardDelete = role === 'SUPER_ADMIN'
 
@@ -740,7 +744,7 @@ export default function JDsPage() {
           <h1 className="text-xl font-semibold">Job descriptions</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{jds.length} total</p>
         </div>
-        {canEdit && (
+        {canCreate && (
           <button
             onClick={() => setShowNew(true)}
             className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm rounded-lg hover:bg-brand-700 font-medium"
@@ -827,7 +831,7 @@ export default function JDsPage() {
 
             {/* Action buttons */}
             <div className="flex flex-wrap items-center gap-2 xl:flex-shrink-0 xl:justify-end">
-              {jd.status === 'RAW' && canEdit && (
+              {AI_ENABLED && jd.status === 'RAW' && canEdit && (
                 <button
                   onClick={() => setConfirm({ type: 'polish', jd })}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-accent"

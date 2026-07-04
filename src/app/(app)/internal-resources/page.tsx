@@ -8,12 +8,15 @@ import {
   Loader2,
   Plus,
   Search,
+  Send,
   Sparkles,
   Trash2,
   Trophy,
   X,
 } from 'lucide-react'
 import { cn, initials } from '@/lib/utils'
+
+const AI_ENABLED = process.env.NEXT_PUBLIC_AI_FEATURES_ENABLED !== 'false'
 
 type ResourceForm = {
   id?: string
@@ -533,6 +536,7 @@ export default function InternalResourcesPage() {
   const [typeFilter, setTypeFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [submittingId, setSubmittingId] = useState('')
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery({
@@ -627,6 +631,36 @@ export default function InternalResourcesPage() {
     }
   }
 
+  const submitToClient = async (resource: any) => {
+    const jdId = resource.pipelineEntries?.[0]?.jd?.id
+    if (!jdId) {
+      toast.error('Link this resource to a JD before submitting')
+      return
+    }
+    setSubmittingId(resource.id)
+    try {
+      const response = await fetch(`/api/internal-resources/${resource.id}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jdId,
+          clientNotes: resource.diversionNotes || 'Internal resource submitted directly to client',
+        }),
+      })
+      const data = await response.json()
+      if (!data.success) {
+        toast.error(data.error || 'Unable to submit resource')
+        return
+      }
+      toast.success('Internal resource submitted to client')
+      qc.invalidateQueries({ queryKey: ['internal-resources'] })
+    } catch {
+      toast.error('Unable to submit resource')
+    } finally {
+      setSubmittingId('')
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1408px] space-y-6 px-2 py-8">
       <div className="flex items-start justify-between gap-4">
@@ -635,12 +669,14 @@ export default function InternalResourcesPage() {
           <p className="mt-2 text-base text-slate-500">ACS employees diverted to the Tahaluf engagement</p>
         </div>
         <div className="mt-2 flex items-center gap-3">
-          <button
-            onClick={() => setShowAnalyzeModal(true)}
-            className="flex items-center gap-2 rounded-xl border border-brand-200 px-5 py-3 text-sm font-semibold text-brand-700 hover:bg-brand-50"
-          >
-            <Sparkles size={16} /> Analyze internal resources
-          </button>
+          {AI_ENABLED && (
+            <button
+              onClick={() => setShowAnalyzeModal(true)}
+              className="flex items-center gap-2 rounded-xl border border-brand-200 px-5 py-3 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+            >
+              <Sparkles size={16} /> Analyze internal resources
+            </button>
+          )}
           <button
             onClick={() => { setEditingResource(null); setShowModal(true) }}
             className="flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700"
@@ -743,7 +779,7 @@ export default function InternalResourcesPage() {
                         {resource.diversionType}
                       </span>
                     )}
-                    {diversion.aiAssessment?.fitScore && (
+                    {AI_ENABLED && diversion.aiAssessment?.fitScore && (
                       <span className="rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-bold uppercase text-emerald-700">
                         AI {diversion.aiAssessment.fitScore}/100
                       </span>
@@ -769,6 +805,14 @@ export default function InternalResourcesPage() {
                     className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-slate-600 hover:bg-accent"
                   >
                     <ArrowLeftRight size={14} /> Divert resource
+                  </button>
+                  <button
+                    onClick={() => submitToClient(resource)}
+                    disabled={submittingId === resource.id || !jd}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-brand-200 px-3 text-xs font-semibold text-brand-700 hover:bg-brand-50 disabled:opacity-50"
+                  >
+                    {submittingId === resource.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                    Submit
                   </button>
                   <button
                     onClick={() => remove(resource)}

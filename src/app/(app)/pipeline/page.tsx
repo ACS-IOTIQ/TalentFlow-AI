@@ -1,19 +1,22 @@
 'use client'
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { cn, stageLabel, stageColor, scoreColor, initials } from '@/lib/utils'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { cn, stageLabel, stageColor, scoreColor, initials, PIPELINE_STAGES } from '@/lib/utils'
 import Link from 'next/link'
 import { GitMerge } from 'lucide-react'
 
 const STAGES = [
-  'NEW', 'SCREENED', 'SCREENING_CALL', 'INTERVIEW_SCHEDULED',
+  'NEW', 'PROFILE_COMPLETE', 'SCREENED', 'SHORTLISTED', 'SCREENING_CALL', 'INTERVIEW_SCHEDULED',
   'INTERVIEWING', 'INTERNAL_APPROVED', 'SUBMITTED_TO_CLIENT',
-  'CLIENT_APPROVED', 'ONBOARDING',
+  'CLIENT_INTERVIEW', 'OFFERED', 'CLIENT_APPROVED', 'ONBOARDING',
 ]
 
 export default function PipelinePage() {
   const [jdId, setJdId] = useState('')
   const [view, setView] = useState<'kanban' | 'list'>('list')
+  const [actingId, setActingId] = useState('')
+  const qc = useQueryClient()
 
   const { data: jdsData } = useQuery({
     queryKey: ['jds-pipeline'],
@@ -39,6 +42,28 @@ export default function PipelinePage() {
     candidates.filter((c: any) =>
       c.pipelineEntries?.some((pe: any) => pe.stage === stage && (!jdId || pe.jdId === jdId))
     )
+
+  const moveStage = async (entryId: string, stage: string) => {
+    setActingId(entryId)
+    try {
+      const response = await fetch(`/api/pipeline-entries/${entryId}/stage`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage, notes: 'Manual pipeline update from pipeline board' }),
+      })
+      const result = await response.json()
+      if (!result.success) {
+        toast.error(result.error || 'Unable to move stage')
+        return
+      }
+      toast.success('Pipeline stage updated')
+      qc.invalidateQueries({ queryKey: ['candidates-pipeline'] })
+    } catch {
+      toast.error('Unable to move stage')
+    } finally {
+      setActingId('')
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -146,9 +171,16 @@ export default function PipelinePage() {
                       </td>
                       <td className="px-4 py-3 text-sm">{pe.jd?.title || '—'}</td>
                       <td className="px-4 py-3">
-                        <span className={cn('px-2 py-0.5 rounded-full text-xs font-medium', stageColor(pe.stage))}>
-                          {stageLabel(pe.stage)}
-                        </span>
+                        <select
+                          value={pe.stage}
+                          disabled={actingId === pe.id}
+                          onChange={event => moveStage(pe.id, event.target.value)}
+                          className={cn('rounded-full border-0 px-2 py-1 text-xs font-medium outline-none', stageColor(pe.stage))}
+                        >
+                          {PIPELINE_STAGES.map(stage => <option key={stage} value={stage}>{stageLabel(stage)}</option>)}
+                          <option value="CLIENT_REJECTED">Client Rejected</option>
+                          <option value="REJECTED">Rejected</option>
+                        </select>
                       </td>
                       <td className="px-4 py-3">
                         {pe.compositeScore ? (

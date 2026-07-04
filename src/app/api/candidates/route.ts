@@ -2,8 +2,9 @@ import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, paginatedOk, getPagination, auditLog, handleError } from '@/lib/api-utils'
 import { uploadFile, BUCKETS } from '@/lib/storage'
-import { extractTextFromFile, extractFilesFromZip, inferNameFromFilename } from '@/lib/resume-parser'
+import { extractTextFromFile, extractFilesFromZip, inferNameFromFilename, parseResumeHeuristically } from '@/lib/resume-parser'
 import { extractResumeProfile, extractResumeProfileFromDocument, type ResumeProfileExtraction, type ResumeExtractionJDContext } from '@/lib/ai/resume-extraction'
+import { aiFeaturesEnabled } from '@/lib/feature-flags'
 import { v4 as uuid } from 'uuid'
 
 type UploadResults = {
@@ -12,6 +13,7 @@ type UploadResults = {
   skipped: number
   errors: number
   aiParsed: number
+  manualParsed: number
   fallbackCreated: number
   extractionErrors: Array<{ fileName: string; error: string }>
 }
@@ -201,7 +203,7 @@ export async function POST(req: NextRequest) {
       }
       : null
 
-    const results: UploadResults = { created: 0, updated: 0, skipped: 0, errors: 0, aiParsed: 0, fallbackCreated: 0, extractionErrors: [] }
+    const results: UploadResults = { created: 0, updated: 0, skipped: 0, errors: 0, aiParsed: 0, manualParsed: 0, fallbackCreated: 0, extractionErrors: [] }
 
     async function processFile(file: File, buffer: Buffer) {
       const isZip = file.name.toLowerCase().endsWith('.zip')
@@ -220,17 +222,28 @@ export async function POST(req: NextRequest) {
           let extraction: ResumeProfileExtraction | null = null
           let extractionError: string | undefined
 
-          try {
-            extraction = text.trim()
-              ? await extractResumeProfile(text, jdContext, f.filename)
-              : await extractResumeProfileFromDocument(f.buffer, f.mimeType || 'application/pdf', jdContext, f.filename)
-            results.aiParsed++
-          } catch (e) {
-            const rawMessage = e instanceof Error ? e.message : 'AI extraction failed'
-            extractionError = rawMessage.startsWith('OLLAMA_NO_MULTIMODAL')
-              ? 'AI could not read this file directly (scanned/image-based document); using basic extraction'
-              : rawMessage
-            results.extractionErrors.push({ fileName: f.filename, error: extractionError })
+          if (aiFeaturesEnabled()) {
+            try {
+              extraction = text.trim()
+                ? await extractResumeProfile(text, jdContext, f.filename)
+                : await extractResumeProfileFromDocument(f.buffer, f.mimeType || 'application/pdf', jdContext, f.filename)
+              results.aiParsed++
+            } catch (e) {
+              const rawMessage = e instanceof Error ? e.message : 'AI extraction failed'
+              extractionError = rawMessage.startsWith('OLLAMA_NO_MULTIMODAL')
+                ? 'AI could not read this file directly (scanned/image-based document); using manual parser'
+                : rawMessage
+              results.extractionErrors.push({ fileName: f.filename, error: extractionError })
+            }
+          }
+
+          if (!extraction && text.trim()) {
+            extraction = parseResumeHeuristically(text, f.filename) as ResumeProfileExtraction
+            results.manualParsed++
+          }
+
+          if (!extraction) {
+            extractionError ||= aiFeaturesEnabled() ? 'AI extraction failed and no readable text was found' : 'No readable text was found for manual parsing'
             results.fallbackCreated++
           }
 
@@ -306,7 +319,7 @@ export async function POST(req: NextRequest) {
               const pipelineEntry = await tx.pipelineEntry.upsert({
                 where: { candidateId_jdId: { candidateId: candidate.id, jdId: jd.id } },
                 update: {},
-                create: { candidateId: candidate.id, jdId: jd.id, stage: 'NEW' },
+                create: { candidateId: candidate.id, jdId: jd.id, stage: extraction ? 'PROFILE_COMPLETE' : 'NEW' },
               })
 
               await tx.pipelineHistory.create({

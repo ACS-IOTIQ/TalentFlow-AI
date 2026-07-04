@@ -6,14 +6,24 @@ import { z } from 'zod'
 
 const updateSubmissionSchema = z.object({
   action: z.enum(['START_ONBOARDING']).optional(),
-  status: z.enum(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED']).optional(),
+  status: z.enum([
+    'SUBMITTED',
+    'UNDER_REVIEW',
+    'CLIENT_INTERVIEW_SCHEDULED',
+    'CLIENT_INTERVIEW_COMPLETED',
+    'CLIENT_SELECTED',
+    'OFFER_RELEASED',
+    'APPROVED',
+    'REJECTED',
+    'WITHDRAWN',
+  ]).optional(),
   clientContact: z.string().optional().nullable(),
   clientNotes: z.string().optional().nullable(),
   profilePdfKey: z.string().optional().nullable(),
   rejectionReason: z.string().optional().nullable(),
 })
 
-const activeSubmissionStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] as const
+const activeSubmissionStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'CLIENT_INTERVIEW_SCHEDULED', 'CLIENT_INTERVIEW_COMPLETED', 'CLIENT_SELECTED', 'OFFER_RELEASED', 'APPROVED'] as const
 
 function submissionInclude() {
   return {
@@ -37,15 +47,22 @@ function submissionInclude() {
 }
 
 function stageForStatus(status: string) {
+  if (status === 'CLIENT_INTERVIEW_SCHEDULED' || status === 'CLIENT_INTERVIEW_COMPLETED') return 'CLIENT_INTERVIEW'
+  if (status === 'CLIENT_SELECTED' || status === 'OFFER_RELEASED') return 'OFFERED'
   if (status === 'APPROVED') return 'CLIENT_APPROVED'
-  if (status === 'REJECTED') return 'CLIENT_REJECTED'
+  if (status === 'REJECTED' || status === 'WITHDRAWN') return 'CLIENT_REJECTED'
   return 'SUBMITTED_TO_CLIENT'
 }
 
 function notesForStatus(status: string) {
   if (status === 'UNDER_REVIEW') return 'Tahaluf submission marked under review'
+  if (status === 'CLIENT_INTERVIEW_SCHEDULED') return 'Client interview scheduled'
+  if (status === 'CLIENT_INTERVIEW_COMPLETED') return 'Client interview completed'
+  if (status === 'CLIENT_SELECTED') return 'Client selected candidate'
+  if (status === 'OFFER_RELEASED') return 'Offer released to candidate'
   if (status === 'APPROVED') return 'Tahaluf submission approved'
   if (status === 'REJECTED') return 'Tahaluf submission rejected'
+  if (status === 'WITHDRAWN') return 'Submission withdrawn'
   return 'Tahaluf submission marked submitted'
 }
 
@@ -97,7 +114,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       ...(data.profilePdfKey !== undefined && { profilePdfKey: cleanText(data.profilePdfKey) }),
       ...(statusChanged && data.status === 'APPROVED' && { approvedAt: new Date(), rejectedAt: null, rejectionReason: null }),
       ...(statusChanged && data.status === 'REJECTED' && { rejectedAt: new Date(), approvedAt: null, rejectionReason: cleanText(data.rejectionReason) }),
-      ...(statusChanged && data.status !== 'REJECTED' && { rejectedAt: null, rejectionReason: null }),
+      ...(statusChanged && data.status === 'WITHDRAWN' && { rejectedAt: new Date(), approvedAt: null, rejectionReason: cleanText(data.rejectionReason) || 'Withdrawn' }),
+      ...(statusChanged && !['REJECTED', 'WITHDRAWN'].includes(data.status || '') && { rejectedAt: null, rejectionReason: null }),
       ...(statusChanged && data.status !== 'APPROVED' && { approvedAt: null }),
       ...(data.rejectionReason !== undefined && nextStatus === 'REJECTED' && { rejectionReason: cleanText(data.rejectionReason) }),
     }

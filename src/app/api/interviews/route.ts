@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { requireAuth, ok, err, paginatedOk, getPagination, auditLog, handleError } from '@/lib/api-utils'
 import { z } from 'zod'
 import { sendInterviewScheduledEmails } from '@/lib/email'
+import { movePipelineStage } from '@/lib/onboarding'
 
 const scheduleSchema = z.object({
   pipelineEntryId: z.string(),
@@ -105,26 +106,47 @@ export async function POST(req: NextRequest) {
         ...feedbackSchema.shape,
       }).parse(body)
 
+      const interview = await prisma.interview.findUnique({
+        where: { id: interviewId },
+        include: { pipelineEntry: { select: { id: true, stage: true } } },
+      })
+      if (!interview) return err('Interview not found', 404)
+
       const existing = await prisma.interviewFeedback.findFirst({
         where: { interviewId, interviewerId: session!.user.id },
       })
-      const feedback = existing
-        ? await prisma.interviewFeedback.update({
-          where: { id: existing.id },
-          data: { ...feedbackData, submittedAt: new Date() },
-        })
-        : await prisma.interviewFeedback.create({
-          data: {
-            interviewId,
-            interviewerId: session!.user.id,
-            ...feedbackData,
-            submittedAt: new Date(),
-          },
+      const feedback = await prisma.$transaction(async (tx) => {
+        const saved = existing
+          ? await tx.interviewFeedback.update({
+            where: { id: existing.id },
+            data: { ...feedbackData, submittedAt: new Date() },
+          })
+          : await tx.interviewFeedback.create({
+            data: {
+              interviewId,
+              interviewerId: session!.user.id,
+              ...feedbackData,
+              submittedAt: new Date(),
+            },
+          })
+
+        await tx.interview.update({
+          where: { id: interviewId },
+          data: { status: 'COMPLETED' },
         })
 
-      await prisma.interview.update({
-        where: { id: interviewId },
-        data: { status: 'COMPLETED' },
+        if (feedbackData.recommendation === 'strong_yes' || feedbackData.recommendation === 'yes') {
+          await movePipelineStage(tx, interview.pipelineEntry, 'INTERNAL_APPROVED', session!.user.id, 'Interview feedback recommends moving forward')
+        }
+        if (feedbackData.recommendation === 'no' || feedbackData.recommendation === 'strong_no') {
+          await tx.pipelineEntry.update({
+            where: { id: interview.pipelineEntry.id },
+            data: { rejectedReason: 'Rejected based on interview feedback' },
+          })
+          await movePipelineStage(tx, interview.pipelineEntry, 'REJECTED', session!.user.id, 'Interview feedback recommends rejection')
+        }
+
+        return saved
       })
       return ok(feedback, 201)
     }

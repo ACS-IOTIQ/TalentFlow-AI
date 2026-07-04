@@ -165,3 +165,29 @@ export async function sendInterviewScheduledEmails(details: InterviewEmailDetail
     if (result.status === 'rejected') logger.error('Interview email failed', result.reason)
   })
 }
+
+export async function sendInterviewUpdatedEmails(details: InterviewEmailDetails, updateType: 'RESCHEDULED' | 'CANCELLED' | 'NO_SHOW' | 'COMPLETED') {
+  const label = updateType.replace(/_/g, ' ').toLowerCase()
+  const subject = `Interview ${label}: ${details.jdTitle} - ${details.roundLabel}`
+  const text = [
+    `Interview ${label}`,
+    '',
+    interviewEmailText(details, 'candidate'),
+  ].join('\n')
+  const html = interviewEmailHtml(details, 'candidate').replace('Your interview has been scheduled', `Your interview has been ${label}`)
+  const interviewerText = [
+    `Interview ${label}`,
+    '',
+    interviewEmailText(details, 'interviewer'),
+  ].join('\n')
+  const interviewerHtml = interviewEmailHtml(details, 'interviewer').replace('Interview scheduled for your assessment', `Interview ${label}`)
+
+  const tasks = [
+    details.candidateEmail ? sendMail(details.candidateEmail, subject, html, text) : Promise.resolve(),
+    sendMail(details.interviewerEmail, subject, interviewerHtml, interviewerText),
+  ]
+  const results = await Promise.allSettled(tasks)
+  results.forEach((result) => {
+    if (result.status === 'rejected') logger.error('Interview update email failed', result.reason)
+  })
+}

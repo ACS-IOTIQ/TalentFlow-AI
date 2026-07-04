@@ -24,9 +24,10 @@ import {
   Video,
   X,
 } from 'lucide-react'
-import { cn, formatDate, formatDateTime, initials, scoreColor, stageColor, stageLabel } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, initials, scoreColor, stageColor, stageLabel, PIPELINE_STAGES } from '@/lib/utils'
 
-const tabs = ['Overview', 'Resume', 'AI Screening', 'Interviews', 'Submissions', 'Notes', 'Activity']
+const AI_ENABLED = process.env.NEXT_PUBLIC_AI_FEATURES_ENABLED !== 'false'
+const tabs = ['Overview', 'Resume', AI_ENABLED ? 'AI Screening' : 'Screening', 'Interviews', 'Submissions', 'Notes', 'Activity']
 
 function hasItems(value: any) {
   return Array.isArray(value) && value.length > 0
@@ -471,6 +472,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
   const [analyzing, setAnalyzing] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [screening, setScreening] = useState(false)
+  const [movingStage, setMovingStage] = useState(false)
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['candidate', params.id],
@@ -603,6 +605,29 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
     }
   }
 
+  const handleMoveStage = async (stage: string) => {
+    if (!entry?.id) return
+    setMovingStage(true)
+    try {
+      const response = await fetch(`/api/pipeline-entries/${entry.id}/stage`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage, notes: 'Manual stage update from candidate profile' }),
+      })
+      const data = await response.json()
+      if (!data.success) {
+        toast.error(data.error || 'Unable to move candidate')
+        return
+      }
+      toast.success('Stage updated')
+      qc.invalidateQueries({ queryKey: ['candidate', params.id] })
+    } catch {
+      toast.error('Unable to move candidate')
+    } finally {
+      setMovingStage(false)
+    }
+  }
+
   const overviewRows: Array<[string, React.ReactNode]> = [
     ['Full name', candidate.fullName],
     ['Email', candidate.email],
@@ -671,23 +696,38 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleAnalyzeCandidate}
-              disabled={analyzing}
-              className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-              Analyze candidate
-            </button>
+            {AI_ENABLED && (
+              <button
+                onClick={handleAnalyzeCandidate}
+                disabled={analyzing}
+                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                Analyze candidate
+              </button>
+            )}
             <button
               onClick={() => setShowEdit(true)}
               className="inline-flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold hover:bg-accent"
             >
               <Edit3 size={16} /> Edit details
             </button>
-            <button className="inline-flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold hover:bg-accent">
-              Move stage <ChevronDown size={16} />
-            </button>
+            {entry && (
+              <label className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-semibold hover:bg-accent">
+                Move stage
+                <ChevronDown size={16} />
+                <select
+                  value={entry.stage}
+                  disabled={movingStage}
+                  onChange={event => handleMoveStage(event.target.value)}
+                  className="bg-transparent text-sm outline-none"
+                >
+                  {PIPELINE_STAGES.map(stage => <option key={stage} value={stage}>{stageLabel(stage)}</option>)}
+                  <option value="CLIENT_REJECTED">Client Rejected</option>
+                  <option value="REJECTED">Rejected</option>
+                </select>
+              </label>
+            )}
             <Link href="/interviews" className="inline-flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold hover:bg-accent">
               <CalendarDays size={16} /> Schedule interview
             </Link>
@@ -738,7 +778,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
             <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h2 className="text-lg font-semibold">Score summary</h2>
-                {jd && (
+                {AI_ENABLED && jd && (
                   <button
                     onClick={handleRunScreening}
                     disabled={screening}
@@ -750,7 +790,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
                 )}
               </div>
               {!jd ? (
-                <p className="text-sm text-slate-500">Link this candidate to a JD to run AI screening.</p>
+                <p className="text-sm text-slate-500">Link this candidate to a JD to manage screening.</p>
               ) : (
                 <div className="grid gap-6 md:grid-cols-[150px_1fr]">
                   <div className="flex items-center justify-center border-r border-border">
@@ -827,7 +867,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
           <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold">AI Extracted Profile</h2>
+              <h2 className="text-lg font-semibold">Parsed / HR Verified Profile</h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {extractionMeta.status === 'FAILED'
                     ? `Extraction failed${extractionMeta.error ? `: ${extractionMeta.error}` : ''}`
@@ -894,7 +934,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
         </div>
       )}
 
-      {activeTab === 'AI Screening' && (
+      {(activeTab === 'AI Screening' || activeTab === 'Screening') && (
         <div className="space-y-5">
           {candidateAnalysis ? (
             <>
@@ -903,7 +943,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
                   <div className="flex items-center justify-between gap-4">
                     <div>
                       <h2 className="text-lg font-semibold">Score summary</h2>
-                      <p className="mt-1 text-sm text-slate-500">Generated by AI for HR screening.</p>
+                      <p className="mt-1 text-sm text-slate-500">{AI_ENABLED ? 'Generated by AI for HR screening.' : 'Stored screening summary for HR review.'}</p>
                     </div>
                     <span className={cn('rounded-xl px-3 py-1 text-sm font-bold', scoreColor(score || 0))}>{score ?? '-'}/100</span>
                   </div>
@@ -921,7 +961,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
                 </div>
 
                 <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-                  <h2 className="text-lg font-semibold">AI Screening Notes</h2>
+                    <h2 className="text-lg font-semibold">{AI_ENABLED ? 'AI Screening Notes' : 'Screening Notes'}</h2>
                   <p className="mt-3 text-sm leading-6 text-slate-600">
                     {candidateAnalysis.screeningNotes || candidateAnalysis.summary || 'No notes generated yet.'}
                   </p>
@@ -966,7 +1006,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-slate-500">No flags identified by AI.</p>
+                      <p className="text-sm text-slate-500">No flags identified.</p>
                     )}
                   </div>
 
@@ -994,18 +1034,22 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
           ) : (
             <div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 p-10 text-center shadow-sm">
               <Sparkles className="mx-auto text-violet-600" size={30} />
-              <h2 className="mt-3 text-lg font-semibold">Generate AI screening pack</h2>
+              <h2 className="mt-3 text-lg font-semibold">{AI_ENABLED ? 'Generate AI screening pack' : 'No screening pack yet'}</h2>
               <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                Analyze the candidate to create score summary, flags, AI screening notes, and 5-10 HR-friendly screening questions.
+                {AI_ENABLED
+                  ? 'Analyze the candidate to create score summary, flags, screening notes, and 5-10 HR-friendly screening questions.'
+                  : 'Use the pipeline stage controls, screening call notes, and interview assessments to progress this candidate manually.'}
               </p>
-              <button
-                onClick={handleAnalyzeCandidate}
-                disabled={analyzing}
-                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
-              >
-                {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                Analyze candidate
-              </button>
+              {AI_ENABLED && (
+                <button
+                  onClick={handleAnalyzeCandidate}
+                  disabled={analyzing}
+                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                >
+                  {analyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                  Analyze candidate
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1030,7 +1074,7 @@ export default function CandidateDetailPage({ params }: { params: { id: string }
         </div>
       )}
 
-      {activeTab !== 'Overview' && activeTab !== 'Resume' && activeTab !== 'AI Screening' && activeTab !== 'Interviews' && (
+      {activeTab !== 'Overview' && activeTab !== 'Resume' && activeTab !== 'AI Screening' && activeTab !== 'Screening' && activeTab !== 'Interviews' && (
         <div className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-slate-500 shadow-sm">
           {activeTab} details are tracked in the workflow modules.
         </div>

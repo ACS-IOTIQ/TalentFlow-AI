@@ -448,10 +448,42 @@ function Metric({ label, value, icon }: { label: string; value: number; icon: Re
 }
 
 function InterviewCard({ interview, compact = false, onAssess }: { interview: any; compact?: boolean; onAssess: (interview: any) => void }) {
+  const qc = useQueryClient()
+  const [acting, setActing] = useState('')
   const candidate = interview.pipelineEntry?.candidate
   const jd = interview.pipelineEntry?.jd
   const scheduledAt = new Date(interview.scheduledAt)
   const roundLabel = interview.roundTemplate?.roundName || `Round ${interview.roundNumber}`
+
+  const updateInterview = async (body: Record<string, unknown>, successMessage: string) => {
+    setActing(JSON.stringify(body))
+    try {
+      const response = await fetch(`/api/interviews/${interview.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const result = await response.json()
+      if (!result.success) {
+        toast.error(result.error || 'Unable to update interview')
+        return
+      }
+      toast.success(successMessage)
+      qc.invalidateQueries({ queryKey: ['interviews'] })
+    } catch {
+      toast.error('Unable to update interview')
+    } finally {
+      setActing('')
+    }
+  }
+
+  const reschedule = () => {
+    const date = window.prompt('New date (YYYY-MM-DD)', scheduledAt.toISOString().slice(0, 10))
+    if (!date) return
+    const time = window.prompt('New time (HH:mm)', scheduledAt.toTimeString().slice(0, 5))
+    if (!time) return
+    updateInterview({ scheduledAt: new Date(`${date}T${time}`).toISOString(), status: 'SCHEDULED' }, 'Interview rescheduled')
+  }
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-colors hover:border-brand-200 hover:bg-slate-50/50">
@@ -498,6 +530,19 @@ function InterviewCard({ interview, compact = false, onAssess }: { interview: an
           <button onClick={() => onAssess(interview)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-accent">
             <ClipboardCheck size={14} /> Assess
           </button>
+          {interview.status === 'SCHEDULED' && (
+            <>
+              <button disabled={Boolean(acting)} onClick={reschedule} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-accent disabled:opacity-50">
+                {acting.includes('scheduledAt') ? <Loader2 size={14} className="animate-spin" /> : <CalendarDays size={14} />} Reschedule
+              </button>
+              <button disabled={Boolean(acting)} onClick={() => updateInterview({ status: 'NO_SHOW' }, 'Marked as no-show')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                {acting.includes('NO_SHOW') ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} No-show
+              </button>
+              <button disabled={Boolean(acting)} onClick={() => updateInterview({ status: 'CANCELLED' }, 'Interview cancelled')} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+                {acting.includes('CANCELLED') ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} Cancel
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

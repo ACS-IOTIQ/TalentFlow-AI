@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import {
   CheckCircle,
   Clock,
+  Download,
   Edit3,
   ExternalLink,
   FileText,
@@ -24,15 +25,24 @@ const STATUS_OPTIONS = [
   ['', 'All'],
   ['SUBMITTED', 'Submitted'],
   ['UNDER_REVIEW', 'Under review'],
+  ['CLIENT_INTERVIEW_SCHEDULED', 'Client interview'],
+  ['CLIENT_SELECTED', 'Selected'],
+  ['OFFER_RELEASED', 'Offer released'],
   ['APPROVED', 'Approved'],
   ['REJECTED', 'Rejected'],
+  ['WITHDRAWN', 'Withdrawn'],
 ]
 
 const STATUS_STYLE: Record<string, { color: string; icon: React.ElementType; label: string }> = {
   SUBMITTED: { color: 'bg-blue-50 text-blue-700 border-blue-100', icon: Send, label: 'Submitted' },
   UNDER_REVIEW: { color: 'bg-amber-50 text-amber-700 border-amber-100', icon: Clock, label: 'Under review' },
+  CLIENT_INTERVIEW_SCHEDULED: { color: 'bg-cyan-50 text-cyan-700 border-cyan-100', icon: Clock, label: 'Client interview scheduled' },
+  CLIENT_INTERVIEW_COMPLETED: { color: 'bg-sky-50 text-sky-700 border-sky-100', icon: CheckCircle, label: 'Client interview completed' },
+  CLIENT_SELECTED: { color: 'bg-lime-50 text-lime-700 border-lime-100', icon: UserCheck, label: 'Client selected' },
+  OFFER_RELEASED: { color: 'bg-purple-50 text-purple-700 border-purple-100', icon: FileText, label: 'Offer released' },
   APPROVED: { color: 'bg-emerald-50 text-emerald-700 border-emerald-100', icon: CheckCircle, label: 'Approved' },
   REJECTED: { color: 'bg-red-50 text-red-700 border-red-100', icon: XCircle, label: 'Rejected' },
+  WITHDRAWN: { color: 'bg-slate-100 text-slate-700 border-slate-200', icon: XCircle, label: 'Withdrawn' },
 }
 
 function emptyForm() {
@@ -220,8 +230,13 @@ function SubmissionModal({
               >
                 <option value="SUBMITTED">Submitted</option>
                 <option value="UNDER_REVIEW">Under review</option>
+                <option value="CLIENT_INTERVIEW_SCHEDULED">Client interview scheduled</option>
+                <option value="CLIENT_INTERVIEW_COMPLETED">Client interview completed</option>
+                <option value="CLIENT_SELECTED">Client selected</option>
+                <option value="OFFER_RELEASED">Offer released</option>
                 <option value="APPROVED">Approved</option>
                 <option value="REJECTED">Rejected</option>
+                <option value="WITHDRAWN">Withdrawn</option>
               </select>
             </label>
           )}
@@ -346,6 +361,8 @@ export default function SubmissionsPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [actingId, setActingId] = useState('')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [exporting, setExporting] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['submissions', statusFilter, search, page],
@@ -411,6 +428,42 @@ export default function SubmissionsPage() {
     }
   }
 
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])
+  }
+
+  const exportSelected = async () => {
+    if (!selectedIds.length) {
+      toast.error('Select at least one submission')
+      return
+    }
+    setExporting(true)
+    try {
+      const response = await fetch('/api/submissions/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds }),
+      })
+      if (!response.ok) {
+        const result = await response.json().catch(() => null)
+        toast.error(result?.error || 'Unable to export submissions')
+        return
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `client-submissions-${new Date().toISOString().slice(0, 10)}.zip`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      toast.success('Submission ZIP downloaded')
+    } catch {
+      toast.error('Unable to export submissions')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-[1408px] space-y-6 px-2 py-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -420,6 +473,10 @@ export default function SubmissionsPage() {
         </div>
         <button onClick={() => setShowNew(true)} className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700">
           <Plus size={16} /> New submission
+        </button>
+        <button onClick={exportSelected} disabled={exporting || selectedIds.length === 0} className="inline-flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-accent disabled:opacity-50">
+          {exporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          Export ZIP {selectedIds.length ? `(${selectedIds.length})` : ''}
         </button>
       </div>
 
@@ -510,6 +567,12 @@ export default function SubmissionsPage() {
                   <tr key={submission.id} className="border-b border-border transition-colors last:border-0 hover:bg-slate-50/70">
                     <td className="px-5 py-4">
                       <div className="flex min-w-0 items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(submission.id)}
+                          onChange={() => toggleSelected(submission.id)}
+                          className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                        />
                         <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold',
                           candidate?.isInternal ? 'bg-pink-100 text-pink-700' : 'bg-brand-100 text-brand-700')}>
                           {initials(candidate?.fullName || '??')}
@@ -550,7 +613,27 @@ export default function SubmissionsPage() {
                             {isActing ? <Loader2 size={14} className="animate-spin" /> : <Clock size={14} />} Review
                           </button>
                         )}
-                        {['SUBMITTED', 'UNDER_REVIEW'].includes(submission.status) && (
+                        {submission.status === 'UNDER_REVIEW' && (
+                          <button disabled={isActing} onClick={() => quickAction(submission, { status: 'CLIENT_INTERVIEW_SCHEDULED' }, 'Client interview scheduled')} className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-200 px-3 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 disabled:opacity-50">
+                            {isActing ? <Loader2 size={14} className="animate-spin" /> : <Clock size={14} />} Client interview
+                          </button>
+                        )}
+                        {submission.status === 'CLIENT_INTERVIEW_SCHEDULED' && (
+                          <button disabled={isActing} onClick={() => quickAction(submission, { status: 'CLIENT_INTERVIEW_COMPLETED' }, 'Client interview completed')} className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50">
+                            {isActing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Complete client interview
+                          </button>
+                        )}
+                        {submission.status === 'CLIENT_INTERVIEW_COMPLETED' && (
+                          <button disabled={isActing} onClick={() => quickAction(submission, { status: 'CLIENT_SELECTED' }, 'Client selected candidate')} className="inline-flex items-center gap-1.5 rounded-lg border border-lime-200 px-3 py-2 text-xs font-semibold text-lime-700 hover:bg-lime-50 disabled:opacity-50">
+                            {isActing ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />} Select
+                          </button>
+                        )}
+                        {submission.status === 'CLIENT_SELECTED' && (
+                          <button disabled={isActing} onClick={() => quickAction(submission, { status: 'OFFER_RELEASED' }, 'Offer released')} className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 px-3 py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50">
+                            {isActing ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} Offer
+                          </button>
+                        )}
+                        {['SUBMITTED', 'UNDER_REVIEW', 'CLIENT_SELECTED', 'OFFER_RELEASED'].includes(submission.status) && (
                           <button disabled={isActing} onClick={() => quickAction(submission, { status: 'APPROVED' }, 'Submission approved')} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">
                             {isActing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} Approve
                           </button>

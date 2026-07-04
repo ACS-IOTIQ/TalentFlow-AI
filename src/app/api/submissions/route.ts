@@ -11,8 +11,16 @@ const submitSchema = z.object({
   profilePdfKey: z.string().optional().nullable(),
 })
 
-const activeSubmissionStatuses = ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'] as const
-const allowedSubmitStages = ['INTERNAL_APPROVED', 'SCREENING_CALL', 'INTERVIEWING', 'INTERVIEW_SCHEDULED', 'CLIENT_REJECTED'] as const
+const activeSubmissionStatuses = [
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'CLIENT_INTERVIEW_SCHEDULED',
+  'CLIENT_INTERVIEW_COMPLETED',
+  'CLIENT_SELECTED',
+  'OFFER_RELEASED',
+  'APPROVED',
+] as const
+const allowedSubmitStages = ['SHORTLISTED', 'SCREENED', 'INTERNAL_APPROVED', 'SCREENING_CALL', 'INTERVIEWING', 'INTERVIEW_SCHEDULED', 'CLIENT_REJECTED', 'OFFERED'] as const
 
 function cleanText(value?: string | null) {
   return value?.trim() || null

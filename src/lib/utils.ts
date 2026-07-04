@@ -27,13 +27,17 @@ export function initials(name: string) {
 export function stageColor(stage: string): string {
   const map: Record<string, string> = {
     NEW: 'bg-gray-100 text-gray-700',
+    PROFILE_COMPLETE: 'bg-sky-100 text-sky-700',
     SCREENING: 'bg-blue-100 text-blue-700',
     SCREENED: 'bg-blue-100 text-blue-700',
+    SHORTLISTED: 'bg-indigo-100 text-indigo-700',
     SCREENING_CALL: 'bg-violet-100 text-violet-700',
     INTERVIEW_SCHEDULED: 'bg-amber-100 text-amber-700',
     INTERVIEWING: 'bg-amber-100 text-amber-700',
     INTERNAL_APPROVED: 'bg-green-100 text-green-700',
     SUBMITTED_TO_CLIENT: 'bg-teal-100 text-teal-700',
+    CLIENT_INTERVIEW: 'bg-cyan-100 text-cyan-700',
+    OFFERED: 'bg-lime-100 text-lime-700',
     CLIENT_APPROVED: 'bg-green-100 text-green-700',
     CLIENT_REJECTED: 'bg-red-100 text-red-700',
     ONBOARDING: 'bg-emerald-100 text-emerald-700',
@@ -54,7 +58,7 @@ export function stageLabel(stage: string) {
 }
 
 export const PIPELINE_STAGES = [
-  'NEW', 'SCREENING', 'SCREENED', 'SCREENING_CALL',
+  'NEW', 'PROFILE_COMPLETE', 'SCREENING', 'SCREENED', 'SHORTLISTED', 'SCREENING_CALL',
   'INTERVIEW_SCHEDULED', 'INTERVIEWING', 'INTERNAL_APPROVED',
-  'SUBMITTED_TO_CLIENT', 'CLIENT_APPROVED', 'ONBOARDING', 'ONBOARDED',
+  'SUBMITTED_TO_CLIENT', 'CLIENT_INTERVIEW', 'OFFERED', 'CLIENT_APPROVED', 'ONBOARDING', 'ONBOARDED',
 ] as const

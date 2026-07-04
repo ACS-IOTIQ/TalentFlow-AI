@@ -10,6 +10,8 @@ import {
   Flag,
   Link2,
   Loader2,
+  Plus,
+  Save,
   Search,
   Trash2,
   Upload,
@@ -46,7 +48,7 @@ function UploadModal({ onClose, jds }: { onClose: () => void; jds: any[] }) {
 
     try {
       setProgress(50)
-      setUploadStatus('Extracting text and parsing with AI...')
+      setUploadStatus('Extracting text and building candidate profiles...')
       const response = await fetch('/api/candidates', { method: 'POST', body: fd })
       setProgress(85)
       setUploadStatus('Saving candidate records...')
@@ -57,14 +59,15 @@ function UploadModal({ onClose, jds }: { onClose: () => void; jds: any[] }) {
         const parts = [
           `${result.created} created`,
           result.updated ? `${result.updated} updated` : null,
-          `${result.aiParsed} AI parsed`,
+          result.aiParsed ? `${result.aiParsed} AI parsed` : null,
+          result.manualParsed ? `${result.manualParsed} manually parsed` : null,
           result.fallbackCreated ? `${result.fallbackCreated} fallback` : null,
           result.skipped ? `${result.skipped} skipped` : null,
           result.errors ? `${result.errors} errors` : null,
         ].filter(Boolean)
         toast.success(`Resume upload complete: ${parts.join(', ')}`)
         if (result.extractionErrors?.length) {
-          toast.warning(`AI extraction fallback: ${result.extractionErrors[0].fileName} - ${result.extractionErrors[0].error}`)
+          toast.warning(`Extraction fallback: ${result.extractionErrors[0].fileName} - ${result.extractionErrors[0].error}`)
         }
         qc.invalidateQueries({ queryKey: ['candidates'] })
         onClose()
@@ -120,7 +123,7 @@ function UploadModal({ onClose, jds }: { onClose: () => void; jds: any[] }) {
             <p className="mb-1 text-base font-semibold">
               {isDragActive ? 'Drop resumes here' : 'Drag & drop resumes here'}
             </p>
-            <p className="text-sm text-muted-foreground">PDF or DOCX or a ZIP batch - skills parsed automatically</p>
+            <p className="text-sm text-muted-foreground">PDF or DOCX or a ZIP batch - profile fields parsed automatically</p>
             {selectedFiles.length > 0 && (
               <p className="mt-3 text-sm text-brand-600">{selectedFiles.length} file(s) selected</p>
             )}
@@ -252,10 +255,137 @@ function LinkJdModal({ candidate, jds, onClose }: { candidate: any; jds: any[]; 
   )
 }
 
+function ManualCandidateModal({ onClose, jds }: { onClose: () => void; jds: any[] }) {
+  const qc = useQueryClient()
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    location: '',
+    currentTitle: '',
+    currentCompany: '',
+    totalExperienceYears: '',
+    noticePeriodDays: '',
+    expectedSalary: '',
+    linkedinUrl: '',
+    source: 'Manual',
+    jdId: '',
+    skills: '',
+    summary: '',
+  })
+
+  const setField = (field: keyof typeof form, value: string) => setForm(current => ({ ...current, [field]: value }))
+  const numberOrNull = (value: string) => value.trim() ? Number(value) : null
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    try {
+      const response = await fetch('/api/candidates/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          jdId: form.jdId || null,
+          totalExperienceYears: numberOrNull(form.totalExperienceYears),
+          noticePeriodDays: numberOrNull(form.noticePeriodDays),
+          expectedSalary: numberOrNull(form.expectedSalary),
+          skills: form.skills.split(',').map(skill => skill.trim()).filter(Boolean),
+        }),
+      })
+      const data = await response.json()
+      if (!data.success) {
+        toast.error(data.error || 'Unable to create candidate')
+        return
+      }
+      toast.success('Candidate created')
+      qc.invalidateQueries({ queryKey: ['candidates'] })
+      onClose()
+    } catch {
+      toast.error('Unable to create candidate')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[1px]">
+      <div className="max-h-[92vh] w-full max-w-[820px] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-6 py-5">
+          <div>
+            <h2 className="text-lg font-semibold">Manual candidate</h2>
+            <p className="mt-1 text-sm text-slate-500">Create a HR-verified profile without resume parsing.</p>
+          </div>
+          <button onClick={onClose} disabled={saving} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 disabled:opacity-50">
+            <X size={18} />
+          </button>
+        </div>
+        <form onSubmit={save} className="max-h-[calc(92vh-88px)] space-y-5 overflow-y-auto p-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <ManualField required label="Full name" value={form.fullName} onChange={value => setField('fullName', value)} />
+            <ManualField label="Email" value={form.email} onChange={value => setField('email', value)} type="email" />
+            <ManualField label="Phone" value={form.phone} onChange={value => setField('phone', value)} />
+            <ManualField label="Location" value={form.location} onChange={value => setField('location', value)} />
+            <ManualField label="Current title" value={form.currentTitle} onChange={value => setField('currentTitle', value)} />
+            <ManualField label="Current company" value={form.currentCompany} onChange={value => setField('currentCompany', value)} />
+            <ManualField label="Experience years" value={form.totalExperienceYears} onChange={value => setField('totalExperienceYears', value)} type="number" />
+            <ManualField label="Notice period days" value={form.noticePeriodDays} onChange={value => setField('noticePeriodDays', value)} type="number" />
+            <ManualField label="Expected salary" value={form.expectedSalary} onChange={value => setField('expectedSalary', value)} type="number" />
+            <ManualField label="LinkedIn URL" value={form.linkedinUrl} onChange={value => setField('linkedinUrl', value)} />
+          </div>
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-600">Link to JD</span>
+            <select value={form.jdId} onChange={event => setField('jdId', event.target.value)} className="h-12 w-full rounded-xl border border-input bg-slate-50 px-4 text-sm outline-none focus:border-brand-400">
+              <option value="">No JD yet</option>
+              {jds.map((jd: any) => <option key={jd.id} value={jd.id}>{jd.title} - {jd.client}</option>)}
+            </select>
+          </label>
+          <ManualField label="Skills" value={form.skills} onChange={value => setField('skills', value)} placeholder="Java, React, SQL" />
+          <label className="block">
+            <span className="mb-2 block text-sm font-semibold text-slate-600">Profile summary</span>
+            <textarea value={form.summary} onChange={event => setField('summary', event.target.value)} rows={4} className="w-full resize-none rounded-xl border border-input bg-slate-50 px-4 py-3 text-sm outline-none focus:border-brand-400" />
+          </label>
+          <div className="flex justify-end gap-3 border-t border-border pt-5">
+            <button type="button" onClick={onClose} disabled={saving} className="rounded-xl border border-border px-5 py-3 text-sm font-medium hover:bg-accent disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save candidate
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function ManualField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  required = false,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  type?: string
+  required?: boolean
+  placeholder?: string
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-semibold text-slate-600">{label}</span>
+      <input required={required} type={type} value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} className="h-12 w-full rounded-xl border border-input bg-slate-50 px-4 text-sm outline-none focus:border-brand-400" />
+    </label>
+  )
+}
+
 export default function CandidatesPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [showUpload, setShowUpload] = useState(false)
+  const [showManual, setShowManual] = useState(false)
   const [internal, setInternal] = useState<boolean | null>(null)
   const [linkCandidate, setLinkCandidate] = useState<any | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -317,12 +447,20 @@ export default function CandidatesPage() {
             {pagination.total ?? 0} candidates - external sourcing & internal diversion
           </p>
         </div>
-        <button
-          onClick={() => setShowUpload(true)}
-          className="mt-2 flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700"
-        >
-          <Upload size={16} /> Upload resumes
-        </button>
+        <div className="mt-2 flex flex-wrap gap-3">
+          <button
+            onClick={() => setShowManual(true)}
+            className="flex items-center gap-2 rounded-xl border border-border px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-accent"
+          >
+            <Plus size={16} /> Manual candidate
+          </button>
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-brand-600/20 hover:bg-brand-700"
+          >
+            <Upload size={16} /> Upload resumes
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-3">
@@ -472,6 +610,7 @@ export default function CandidatesPage() {
       </div>
 
       {showUpload && <UploadModal onClose={() => setShowUpload(false)} jds={jds} />}
+      {showManual && <ManualCandidateModal onClose={() => setShowManual(false)} jds={jds} />}
       {linkCandidate && <LinkJdModal candidate={linkCandidate} jds={jds} onClose={() => setLinkCandidate(null)} />}
     </div>
   )

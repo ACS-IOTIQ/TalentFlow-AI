@@ -50,6 +50,7 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Remote', 'Hybrid']
+const AI_ENABLED = process.env.NEXT_PUBLIC_AI_FEATURES_ENABLED !== 'false'
 
 // ─── Confirm Dialog ───────────────────────────────────────────────────────────
 
@@ -445,7 +446,7 @@ export default function JDDetailPage({ params }: { params: { id: string } }) {
 
         {/* Header action buttons */}
         <div className="flex flex-wrap items-center gap-2 xl:flex-shrink-0 xl:justify-end">
-          {jd.status === 'RAW' && canEdit && (
+          {AI_ENABLED && jd.status === 'RAW' && canEdit && (
             <button
               onClick={() => setConfirm('polish')}
               className="flex items-center gap-1.5 px-3 py-2 text-sm border border-border rounded-lg hover:bg-accent"
